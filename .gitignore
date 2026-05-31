@@ -38,6 +38,9 @@ datasets/
 *.zip
 *.gz
 
+# Reference papers and local notes
+references/
+
 # Jupyter
 .ipynb_checkpoints/
 
