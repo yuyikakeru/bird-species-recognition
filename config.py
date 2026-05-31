@@ -14,8 +14,8 @@ class DataConfig:
     root: Path = DEFAULT_CUB_ROOT
     image_size: int = 448
     resize_size: int = 512
-    batch_size: int = 8
-    num_workers: int = 0
+    batch_size: int = 16
+    num_workers: int = 4
     use_bbox_crop: bool = False
     bbox_margin: float = 0.08
     return_parts: bool = True
@@ -25,13 +25,18 @@ class DataConfig:
 @dataclass
 class TrainConfig:
     epochs: int = 1
-    lr: float = 1e-3
+    lr: float = 0.01
     weight_decay: float = 1e-4
-    optimizer: str = "adamw"
+    optimizer: str = "sgd"
+    momentum: float = 0.9
+    label_smoothing: float = 0.1
+    scheduler: str = "cosine"
     seed: int = 42
     device: str = "auto"
     amp: bool = True
     log_interval: int = 20
+    max_train_batches: Optional[int] = None
+    max_val_batches: Optional[int] = None
     output_dir: Path = PROJECT_ROOT / "log"
     ckpt_dir: Path = PROJECT_ROOT / "ckpt"
 

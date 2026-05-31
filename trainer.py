@@ -5,9 +5,8 @@ from typing import Dict, Optional
 
 import torch
 from torch import nn
-from torch.cuda.amp import GradScaler, autocast
 
-from utils import AverageMeter, accuracy, ensure_dir, save_checkpoint
+from utils import AverageMeter, accuracy, ensure_dir, save_checkpoint, save_csv, save_json
 
 
 class Trainer:
@@ -30,7 +29,8 @@ class Trainer:
         self.optimizer = optimizer
         self.scheduler = scheduler
         self.device = device or torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        self.scaler = GradScaler(enabled=cfg.train.amp and self.device.type == "cuda")
+        self.amp_enabled = cfg.train.amp and self.device.type == "cuda"
+        self.scaler = torch.amp.GradScaler("cuda", enabled=self.amp_enabled)
         self.best_top1 = 0.0
 
         self.model.to(self.device)
@@ -44,10 +44,12 @@ class Trainer:
             raise ValueError("optimizer is required for fit().")
 
         last_metrics: Dict[str, float] = {}
+        history = []
         for epoch in range(self.cfg.train.epochs):
             train_metrics = self.train_one_epoch(epoch)
             val_metrics = self.evaluate(epoch)
             last_metrics = {**train_metrics, **val_metrics}
+            history.append({"epoch": epoch + 1, **last_metrics})
 
             if self.scheduler is not None:
                 self.scheduler.step()
@@ -65,7 +67,12 @@ class Trainer:
                     Path(self.cfg.train.ckpt_dir) / f"{self.cfg.model.name}_best.pt",
                 )
 
-        return last_metrics
+        save_json(
+            {"model": self.cfg.model.name, "best_top1": self.best_top1, "history": history},
+            Path(self.cfg.train.output_dir) / f"{self.cfg.model.name}_history.json",
+        )
+        save_csv(history, Path(self.cfg.train.output_dir) / f"{self.cfg.model.name}_history.csv")
+        return {**last_metrics, "best_top1": self.best_top1}
 
     def train_one_epoch(self, epoch: int) -> Dict[str, float]:
         self.model.train()
@@ -73,11 +80,17 @@ class Trainer:
         top1_meter = AverageMeter()
 
         for step, batch in enumerate(self.train_loader):
+            if (
+                self.cfg.train.max_train_batches is not None
+                and step >= self.cfg.train.max_train_batches
+            ):
+                break
+
             images = batch["image"].to(self.device, non_blocking=True)
             labels = batch["label"].to(self.device, non_blocking=True)
 
             self.optimizer.zero_grad(set_to_none=True)
-            with autocast(enabled=self.scaler.is_enabled()):
+            with torch.amp.autocast(self.device.type, enabled=self.amp_enabled):
                 logits = self.model(images)
                 loss = self.criterion(logits, labels)
 
@@ -92,7 +105,7 @@ class Trainer:
 
             if step % self.cfg.train.log_interval == 0:
                 print(
-                    f"epoch={epoch + 1} step={step} "
+                    f"train epoch={epoch + 1} step={step + 1}/{len(self.train_loader)} "
                     f"loss={loss_meter.avg:.4f} top1={top1_meter.avg:.2f}"
                 )
 
@@ -108,7 +121,13 @@ class Trainer:
         top1_meter = AverageMeter()
         top5_meter = AverageMeter()
 
-        for batch in self.val_loader:
+        for step, batch in enumerate(self.val_loader):
+            if (
+                self.cfg.train.max_val_batches is not None
+                and step >= self.cfg.train.max_val_batches
+            ):
+                break
+
             images = batch["image"].to(self.device, non_blocking=True)
             labels = batch["label"].to(self.device, non_blocking=True)
 
@@ -120,6 +139,13 @@ class Trainer:
             loss_meter.update(float(loss.item()), batch_size)
             top1_meter.update(acc["top1"], batch_size)
             top5_meter.update(acc["top5"], batch_size)
+
+            if step % self.cfg.train.log_interval == 0:
+                print(
+                    f"eval epoch={epoch + 1} step={step + 1}/{len(self.val_loader)} "
+                    f"loss={loss_meter.avg:.4f} top1={top1_meter.avg:.2f} "
+                    f"top5={top5_meter.avg:.2f}"
+                )
 
         print(
             f"eval epoch={epoch + 1} "

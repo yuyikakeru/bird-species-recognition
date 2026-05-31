@@ -2,8 +2,9 @@ from __future__ import annotations
 
 import json
 import random
+import csv
 from pathlib import Path
-from typing import Dict, Iterable, Tuple
+from typing import Dict, Iterable, List, Tuple
 
 import numpy as np
 import torch
@@ -69,6 +70,28 @@ def save_json(data: Dict[str, object], path: Path | str) -> None:
     ensure_dir(path.parent)
     with path.open("w", encoding="utf-8") as handle:
         json.dump(data, handle, ensure_ascii=False, indent=2)
+
+
+def save_csv(rows: List[Dict[str, object]], path: Path | str) -> None:
+    path = Path(path)
+    ensure_dir(path.parent)
+    if not rows:
+        return
+
+    fieldnames = list(rows[0].keys())
+    with path.open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=fieldnames)
+        writer.writeheader()
+        writer.writerows(rows)
+
+
+def mean_std(values: Iterable[float]) -> Tuple[float, float]:
+    values = list(values)
+    if not values:
+        return 0.0, 0.0
+    mean = float(np.mean(values))
+    std = float(np.std(values, ddof=1)) if len(values) > 1 else 0.0
+    return mean, std
 
 
 def save_checkpoint(
