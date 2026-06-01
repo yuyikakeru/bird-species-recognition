@@ -35,6 +35,8 @@ class TrainConfig:
     device: str = "auto"
     amp: bool = True
     log_interval: int = 20
+    early_stop_patience: int = 5
+    early_stop_min_delta: float = 0.2
     max_train_batches: Optional[int] = None
     max_val_batches: Optional[int] = None
     output_dir: Path = PROJECT_ROOT / "log"

@@ -57,6 +57,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--momentum", type=float, default=None)
     parser.add_argument("--label-smoothing", type=float, default=None)
     parser.add_argument("--scheduler", choices=["cosine", "none"], default=None)
+    parser.add_argument("--early-stop-patience", type=int, default=None)
+    parser.add_argument("--early-stop-min-delta", type=float, default=None)
     parser.add_argument("--max-train-batches", type=int, default=None)
     parser.add_argument("--max-val-batches", type=int, default=None)
     parser.add_argument("--device", default=None)
@@ -216,6 +218,8 @@ def main() -> None:
         momentum=args.momentum,
         label_smoothing=args.label_smoothing,
         scheduler=args.scheduler,
+        early_stop_patience=args.early_stop_patience,
+        early_stop_min_delta=args.early_stop_min_delta,
         max_train_batches=args.max_train_batches,
         max_val_batches=args.max_val_batches,
         device=args.device,

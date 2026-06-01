@@ -31,7 +31,7 @@ class Trainer:
         self.device = device or torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.amp_enabled = cfg.train.amp and self.device.type == "cuda"
         self.scaler = torch.amp.GradScaler("cuda", enabled=self.amp_enabled)
-        self.best_top1 = 0.0
+        self.best_top1 = -float("inf")
 
         self.model.to(self.device)
         ensure_dir(cfg.train.output_dir)
@@ -45,17 +45,23 @@ class Trainer:
 
         last_metrics: Dict[str, float] = {}
         history = []
+        epochs_without_improvement = 0
         for epoch in range(self.cfg.train.epochs):
             train_metrics = self.train_one_epoch(epoch)
             val_metrics = self.evaluate(epoch)
-            last_metrics = {**train_metrics, **val_metrics}
+            improved = (
+                val_metrics["val_top1"]
+                > self.best_top1 + self.cfg.train.early_stop_min_delta
+            )
+            last_metrics = {**train_metrics, **val_metrics, "best_top1": self.best_top1}
             history.append({"epoch": epoch + 1, **last_metrics})
 
             if self.scheduler is not None:
                 self.scheduler.step()
 
-            if val_metrics["val_top1"] >= self.best_top1:
+            if improved:
                 self.best_top1 = val_metrics["val_top1"]
+                epochs_without_improvement = 0
                 save_checkpoint(
                     {
                         "epoch": epoch,
@@ -66,9 +72,32 @@ class Trainer:
                     },
                     Path(self.cfg.train.ckpt_dir) / f"{self.cfg.model.name}_best.pt",
                 )
+                history[-1]["best_top1"] = self.best_top1
+            else:
+                epochs_without_improvement += 1
+
+            patience = self.cfg.train.early_stop_patience
+            if patience > 0 and epochs_without_improvement >= patience:
+                print(
+                    f"early_stop epoch={epoch + 1} "
+                    f"best_top1={self.best_top1:.2f} "
+                    f"patience={patience}"
+                )
+                last_metrics = {**last_metrics, "best_top1": self.best_top1}
+                break
+
+        if self.best_top1 == -float("inf"):
+            self.best_top1 = 0.0
 
         save_json(
-            {"model": self.cfg.model.name, "best_top1": self.best_top1, "history": history},
+            {
+                "model": self.cfg.model.name,
+                "best_top1": self.best_top1,
+                "early_stop_patience": self.cfg.train.early_stop_patience,
+                "early_stop_min_delta": self.cfg.train.early_stop_min_delta,
+                "epochs_ran": len(history),
+                "history": history,
+            },
             Path(self.cfg.train.output_dir) / f"{self.cfg.model.name}_history.json",
         )
         save_csv(history, Path(self.cfg.train.output_dir) / f"{self.cfg.model.name}_history.csv")
