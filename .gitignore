@@ -25,6 +25,7 @@ env/
 .DS_Store
 Thumbs.db
 AGENTS.md
+fine_grained_bird_recognition_plan.md
 
 # Model checkpoints and logs
 ckpt/
