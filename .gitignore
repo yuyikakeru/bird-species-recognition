@@ -24,6 +24,7 @@ env/
 # OS
 .DS_Store
 Thumbs.db
+AGENTS.md
 
 # Model checkpoints and logs
 ckpt/
