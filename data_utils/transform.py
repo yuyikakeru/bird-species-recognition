@@ -7,11 +7,21 @@ IMAGENET_MEAN = (0.485, 0.456, 0.406)
 IMAGENET_STD = (0.229, 0.224, 0.225)
 
 
-def build_transforms(split: str, image_size: int = 448, resize_size: int = 512):
+def build_transforms(
+    split: str,
+    image_size: int = 448,
+    resize_size: int = 512,
+    use_bbox_crop: bool = False,
+):
     if split == "train":
+        spatial_transform = (
+            [transforms.Resize((image_size, image_size))]
+            if use_bbox_crop
+            else [transforms.RandomResizedCrop(image_size, scale=(0.65, 1.0))]
+        )
         return transforms.Compose(
-            [
-                transforms.RandomResizedCrop(image_size, scale=(0.65, 1.0)),
+            spatial_transform
+            + [
                 transforms.RandomHorizontalFlip(),
                 transforms.ColorJitter(
                     brightness=0.2,
@@ -25,10 +35,17 @@ def build_transforms(split: str, image_size: int = 448, resize_size: int = 512):
         )
 
     if split in {"val", "test"}:
-        return transforms.Compose(
-            [
+        spatial_transform = (
+            [transforms.Resize((image_size, image_size))]
+            if use_bbox_crop
+            else [
                 transforms.Resize(resize_size),
                 transforms.CenterCrop(image_size),
+            ]
+        )
+        return transforms.Compose(
+            spatial_transform
+            + [
                 transforms.ToTensor(),
                 transforms.Normalize(IMAGENET_MEAN, IMAGENET_STD),
             ]

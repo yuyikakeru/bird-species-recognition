@@ -46,12 +46,15 @@ class Trainer:
         last_metrics: Dict[str, float] = {}
         history = []
         epochs_without_improvement = 0
+        early_stop_best_top1 = -float("inf")
         for epoch in range(self.cfg.train.epochs):
             train_metrics = self.train_one_epoch(epoch)
             val_metrics = self.evaluate(epoch)
-            improved = (
-                val_metrics["val_top1"]
-                > self.best_top1 + self.cfg.train.early_stop_min_delta
+            val_top1 = val_metrics["val_top1"]
+            is_best = val_top1 > self.best_top1
+            early_stop_improved = (
+                val_top1
+                > early_stop_best_top1 + self.cfg.train.early_stop_min_delta
             )
             last_metrics = {**train_metrics, **val_metrics, "best_top1": self.best_top1}
             history.append({"epoch": epoch + 1, **last_metrics})
@@ -59,9 +62,8 @@ class Trainer:
             if self.scheduler is not None:
                 self.scheduler.step()
 
-            if improved:
-                self.best_top1 = val_metrics["val_top1"]
-                epochs_without_improvement = 0
+            if is_best:
+                self.best_top1 = val_top1
                 save_checkpoint(
                     {
                         "epoch": epoch,
@@ -73,6 +75,10 @@ class Trainer:
                     Path(self.cfg.train.ckpt_dir) / f"{self.cfg.model.name}_best.pt",
                 )
                 history[-1]["best_top1"] = self.best_top1
+
+            if early_stop_improved:
+                early_stop_best_top1 = val_top1
+                epochs_without_improvement = 0
             else:
                 epochs_without_improvement += 1
 

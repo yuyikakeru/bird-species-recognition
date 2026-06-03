@@ -17,7 +17,7 @@ class DataConfig:
     batch_size: int = 16
     num_workers: int = 4
     use_bbox_crop: bool = False
-    bbox_margin: float = 0.08
+    bbox_margin: float = 0.2
     return_parts: bool = True
     pin_memory: bool = True
 
@@ -36,7 +36,7 @@ class TrainConfig:
     amp: bool = True
     log_interval: int = 20
     early_stop_patience: int = 5
-    early_stop_min_delta: float = 0.2
+    early_stop_min_delta: float = 0.1
     max_train_batches: Optional[int] = None
     max_val_batches: Optional[int] = None
     output_dir: Path = PROJECT_ROOT / "log"

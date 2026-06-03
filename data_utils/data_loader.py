@@ -19,7 +19,7 @@ class CUBDataset(Dataset):
         split: str,
         transform=None,
         use_bbox_crop: bool = False,
-        bbox_margin: float = 0.08,
+        bbox_margin: float = 0.2,
         return_parts: bool = True,
     ) -> None:
         self.root = Path(root)
@@ -156,7 +156,12 @@ class CUBDataset(Dataset):
 
 
 def build_dataset(cfg, split: str) -> CUBDataset:
-    transform = build_transforms(split, cfg.data.image_size, cfg.data.resize_size)
+    transform = build_transforms(
+        split,
+        cfg.data.image_size,
+        cfg.data.resize_size,
+        use_bbox_crop=cfg.data.use_bbox_crop,
+    )
     return CUBDataset(
         root=cfg.data.root,
         split=split,

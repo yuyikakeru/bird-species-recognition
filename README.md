@@ -57,7 +57,7 @@ python main.py --mode train --model smoke --epochs 1 --batch-size 16 --num-worke
 ### 推荐正式训练命令
 
 ```powershell
-python main.py --mode train --model resnet50_baseline --batch-size 16 --image-size 448 --resize-size 512 --epochs 50 --optimizer sgd --lr 0.01 --weight-decay 1e-4 --num-workers 4 --early-stop-patience 5 --early-stop-min-delta 0.2 --seeds 42,2024,3407 --run-name resnet50_baseline_3seeds
+python main.py --mode train --model resnet50_baseline --batch-size 16 --image-size 448 --resize-size 512 --epochs 50 --optimizer sgd --lr 0.01 --weight-decay 1e-4 --num-workers 4 --early-stop-patience 5 --early-stop-min-delta 0.1 --seeds 42,2024,3407 --run-name resnet50_baseline_3seeds
 ```
 
 该命令会使用 3 个随机种子重复训练，并把结果保存到 `log\resnet50_baseline\resnet50_baseline_3seeds\` 和 `ckpt\resnet50_baseline\resnet50_baseline_3seeds\`。
@@ -65,7 +65,7 @@ python main.py --mode train --model resnet50_baseline --batch-size 16 --image-si
 ResNet50 默认使用 ImageNet 预训练权重。如果当前环境不能联网下载权重，可以先加 `--no-pretrained` 跑通流程：
 
 ```powershell
-python main.py --mode train --model resnet50_baseline --no-pretrained --batch-size 16 --image-size 448 --resize-size 512 --epochs 50 --optimizer sgd --lr 0.01 --weight-decay 1e-4 --num-workers 4 --early-stop-patience 5 --early-stop-min-delta 0.2 --seeds 42,2024,3407 --run-name resnet50_baseline_3seeds
+python main.py --mode train --model resnet50_baseline --no-pretrained --batch-size 16 --image-size 448 --resize-size 512 --epochs 50 --optimizer sgd --lr 0.01 --weight-decay 1e-4 --num-workers 4 --early-stop-patience 5 --early-stop-min-delta 0.1 --seeds 42,2024,3407 --run-name resnet50_baseline_3seeds
 ```
 
 ## 常用参数
@@ -91,7 +91,7 @@ python main.py --mode train --model resnet50_baseline --no-pretrained --batch-si
 可以用逗号传入多个 seed，程序会依次训练并汇总结果。正式训练推荐使用：
 
 ```powershell
-python main.py --mode train --model resnet50_baseline --batch-size 16 --image-size 448 --resize-size 512 --epochs 50 --optimizer sgd --lr 0.01 --weight-decay 1e-4 --num-workers 4 --early-stop-patience 5 --early-stop-min-delta 0.2 --seeds 42,2024,3407 --run-name resnet50_baseline_3seeds
+python main.py --mode train --model resnet50_baseline --batch-size 16 --image-size 448 --resize-size 512 --epochs 50 --optimizer sgd --lr 0.01 --weight-decay 1e-4 --num-workers 4 --early-stop-patience 5 --early-stop-min-delta 0.1 --seeds 42,2024,3407 --run-name resnet50_baseline_3seeds
 ```
 
 ## 输出位置
