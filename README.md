@@ -70,7 +70,7 @@ python main.py --mode train --model resnet50_baseline --no-pretrained --batch-si
 
 ## 常用参数
 
-- `--mode smoke|train`：运行模式，默认 `smoke`。
+- `--mode smoke|train|summarize`：运行模式，默认 `smoke`。
 - `--model smoke|resnet50_baseline`：模型名称，默认 `smoke`。
 - `--data-root <路径>`：指定 CUB_200_2011 数据集根目录。
 - `--epochs <数字>`：训练轮数。
@@ -109,6 +109,27 @@ ckpt\<model>\
 ```
 
 多 seed 运行时会在 `log\<model>\<run-name>\seed_<seed>\` 和 `ckpt\<model>\<run-name>\seed_<seed>\` 下分别保存每次实验结果。
+
+如果三个 seed 是单独运行完成的，可以只读取已有历史日志并生成综合结果，不会重新训练：
+
+Block B 原图基线：
+
+```powershell
+python main.py --mode summarize --model resnet50_baseline --seeds 42,2024,3407 --run-name resnet50_baseline_3seeds
+```
+
+Block C bbox 裁剪：
+
+```powershell
+python main.py --mode summarize --model resnet50_baseline --seeds 42,2024,3407 --run-name blockC_bbox_crop
+```
+
+命令会在对应的 `run-name` 目录中生成：
+
+```text
+log\resnet50_baseline\<run-name>\repeat_summary.json
+log\resnet50_baseline\<run-name>\repeat_summary.csv
+```
 
 ## 当前推荐调试命令
 

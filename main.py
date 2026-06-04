@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import copy
+import json
 from pathlib import Path
 
 import torch
@@ -32,7 +33,7 @@ class SmokeClassifier(nn.Module):
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="CUB_200_2011 training entrypoint")
-    parser.add_argument("--mode", choices=["smoke", "train"], default="smoke")
+    parser.add_argument("--mode", choices=["smoke", "train", "summarize"], default="smoke")
     parser.add_argument("--model", default="smoke")
     parser.add_argument("--data-root", default=None)
     parser.add_argument("--batch-size", type=int, default=None)
@@ -160,6 +161,27 @@ def run_train(cfg) -> None:
     return trainer.fit()
 
 
+def save_repeat_summary(cfg, seeds: list[int], rows: list[dict], base_output_dir: Path) -> None:
+    top1_mean, top1_std = mean_std(row["best_top1"] for row in rows)
+    val_top1_mean, val_top1_std = mean_std(row["val_top1"] for row in rows)
+    val_top5_mean, val_top5_std = mean_std(row["val_top5"] for row in rows)
+    summary = {
+        "model": cfg.model.name,
+        "seeds": seeds,
+        "runs": rows,
+        "best_top1_mean": top1_mean,
+        "best_top1_std": top1_std,
+        "last_val_top1_mean": val_top1_mean,
+        "last_val_top1_std": val_top1_std,
+        "last_val_top5_mean": val_top5_mean,
+        "last_val_top5_std": val_top5_std,
+    }
+
+    save_json(summary, base_output_dir / "repeat_summary.json")
+    save_csv(rows, base_output_dir / "repeat_summary.csv")
+    print("repeat_summary", summary)
+
+
 def run_repeated_train(cfg, seeds: list[int], run_name: str | None = None) -> None:
     experiment_name = run_name or "seeds_" + "_".join(str(seed) for seed in seeds)
     base_output_dir = Path(cfg.train.output_dir) / cfg.model.name / experiment_name
@@ -182,24 +204,44 @@ def run_repeated_train(cfg, seeds: list[int], run_name: str | None = None) -> No
         print("final_metrics", rows[0])
         return
 
-    top1_mean, top1_std = mean_std(row["best_top1"] for row in rows)
-    val_top1_mean, val_top1_std = mean_std(row["val_top1"] for row in rows)
-    val_top5_mean, val_top5_std = mean_std(row["val_top5"] for row in rows)
-    summary = {
-        "model": cfg.model.name,
-        "seeds": seeds,
-        "runs": rows,
-        "best_top1_mean": top1_mean,
-        "best_top1_std": top1_std,
-        "last_val_top1_mean": val_top1_mean,
-        "last_val_top1_std": val_top1_std,
-        "last_val_top5_mean": val_top5_mean,
-        "last_val_top5_std": val_top5_std,
-    }
+    save_repeat_summary(cfg, seeds, rows, base_output_dir)
 
-    save_json(summary, base_output_dir / "repeat_summary.json")
-    save_csv(rows, base_output_dir / "repeat_summary.csv")
-    print("repeat_summary", summary)
+
+def run_summarize(cfg, seeds: list[int], run_name: str | None = None) -> None:
+    experiment_name = run_name or "seeds_" + "_".join(str(seed) for seed in seeds)
+    base_output_dir = Path(cfg.train.output_dir) / cfg.model.name / experiment_name
+    rows = []
+
+    for run_index, seed in enumerate(seeds, start=1):
+        history_path = (
+            base_output_dir
+            / f"seed_{seed}"
+            / f"{cfg.model.name}_history.json"
+        )
+        if not history_path.exists():
+            raise FileNotFoundError(f"Missing history file: {history_path}")
+
+        with history_path.open("r", encoding="utf-8") as handle:
+            result = json.load(handle)
+
+        history = result.get("history", [])
+        if not history:
+            raise ValueError(f"History is empty: {history_path}")
+
+        last_metrics = history[-1]
+        row = {
+            "run": run_index,
+            "seed": seed,
+            "train_loss": last_metrics["train_loss"],
+            "train_top1": last_metrics["train_top1"],
+            "val_loss": last_metrics["val_loss"],
+            "val_top1": last_metrics["val_top1"],
+            "val_top5": last_metrics["val_top5"],
+            "best_top1": result["best_top1"],
+        }
+        rows.append(row)
+
+    save_repeat_summary(cfg, seeds, rows, base_output_dir)
 
 
 def main() -> None:
@@ -236,8 +278,10 @@ def main() -> None:
 
     if args.mode == "smoke":
         run_smoke(cfg)
-    else:
+    elif args.mode == "train":
         run_repeated_train(cfg, seeds, args.run_name)
+    else:
+        run_summarize(cfg, seeds, args.run_name)
 
 
 if __name__ == "__main__":
