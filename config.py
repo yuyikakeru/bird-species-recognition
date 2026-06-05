@@ -12,8 +12,8 @@ DEFAULT_CUB_ROOT = PROJECT_ROOT / "datasets" / "CUB_200_2011" / "CUB_200_2011"
 @dataclass
 class DataConfig:
     root: Path = DEFAULT_CUB_ROOT
-    image_size: int = 448
-    resize_size: int = 512
+    image_size: int = 224
+    resize_size: int = 256
     batch_size: int = 16
     num_workers: int = 4
     use_bbox_crop: bool = False

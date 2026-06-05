@@ -57,15 +57,15 @@ python main.py --mode train --model smoke --epochs 1 --batch-size 16 --num-worke
 ### 推荐正式训练命令
 
 ```powershell
-python main.py --mode train --model resnet50_baseline --batch-size 16 --image-size 448 --resize-size 512 --epochs 50 --optimizer sgd --lr 0.01 --weight-decay 1e-4 --num-workers 4 --early-stop-patience 5 --early-stop-min-delta 0.1 --seeds 42,2024,3407 --run-name resnet50_baseline_3seeds
+python main.py --mode train --model resnet50_baseline --batch-size 16 --image-size 224 --resize-size 256 --epochs 50 --optimizer sgd --lr 0.01 --weight-decay 1e-4 --num-workers 4 --early-stop-patience 5 --early-stop-min-delta 0.1 --seeds 42,2024,3407 --run-name resnet50_baseline_224_3seeds
 ```
 
-该命令会使用 3 个随机种子重复训练，并把结果保存到 `log\resnet50_baseline\resnet50_baseline_3seeds\` 和 `ckpt\resnet50_baseline\resnet50_baseline_3seeds\`。
+该命令会使用 3 个随机种子重复训练，并把结果保存到 `log\resnet50_baseline\resnet50_baseline_224_3seeds\` 和 `ckpt\resnet50_baseline\resnet50_baseline_224_3seeds\`。
 
 ResNet50 默认使用 ImageNet 预训练权重。如果当前环境不能联网下载权重，可以先加 `--no-pretrained` 跑通流程：
 
 ```powershell
-python main.py --mode train --model resnet50_baseline --no-pretrained --batch-size 16 --image-size 448 --resize-size 512 --epochs 50 --optimizer sgd --lr 0.01 --weight-decay 1e-4 --num-workers 4 --early-stop-patience 5 --early-stop-min-delta 0.1 --seeds 42,2024,3407 --run-name resnet50_baseline_3seeds
+python main.py --mode train --model resnet50_baseline --no-pretrained --batch-size 16 --image-size 224 --resize-size 256 --epochs 50 --optimizer sgd --lr 0.01 --weight-decay 1e-4 --num-workers 4 --early-stop-patience 5 --early-stop-min-delta 0.1 --seeds 42,2024,3407 --run-name resnet50_baseline_224_3seeds
 ```
 
 ## 常用参数
@@ -75,8 +75,8 @@ python main.py --mode train --model resnet50_baseline --no-pretrained --batch-si
 - `--data-root <路径>`：指定 CUB_200_2011 数据集根目录。
 - `--epochs <数字>`：训练轮数。
 - `--batch-size <数字>`：batch size。
-- `--image-size <数字>`：输入裁剪尺寸，默认 `448`。
-- `--resize-size <数字>`：resize 尺寸，默认 `512`。
+- `--image-size <数字>`：输入裁剪尺寸，默认 `224`。
+- `--resize-size <数字>`：resize 尺寸，默认 `256`。
 - `--lr <数字>`：学习率。
 - `--optimizer sgd|adamw`：优化器，默认 `sgd`。
 - `--scheduler cosine|none`：学习率调度器，默认 `cosine`。
@@ -86,21 +86,25 @@ python main.py --mode train --model resnet50_baseline --no-pretrained --batch-si
 - `--no-pretrained`：ResNet50 不加载 ImageNet 预训练权重。
 - `--max-train-batches <数字>` / `--max-val-batches <数字>`：限制每轮训练/验证 batch 数，适合快速调试。
 
+## 图像尺寸切换
+
+默认模型实验使用 `--image-size 224 --resize-size 256`。如果需要比较更高输入分辨率，可以显式修改这两个参数，例如使用 `--image-size 448 --resize-size 512`。切换尺寸时，`--run-name` 也应同步加入尺寸后缀，例如 `resnet50_baseline_224_3seeds` 或 `resnet50_baseline_448_3seeds`，避免不同输入尺寸的日志和 checkpoint 混在同一目录。
+
 ## 多随机种子实验
 
 可以用逗号传入多个 seed，程序会依次训练并汇总结果。正式训练推荐使用：
 
 ```powershell
-python main.py --mode train --model resnet50_baseline --batch-size 16 --image-size 448 --resize-size 512 --epochs 50 --optimizer sgd --lr 0.01 --weight-decay 1e-4 --num-workers 4 --early-stop-patience 5 --early-stop-min-delta 0.1 --seeds 42,2024,3407 --run-name resnet50_baseline_3seeds
+python main.py --mode train --model resnet50_baseline --batch-size 16 --image-size 224 --resize-size 256 --epochs 50 --optimizer sgd --lr 0.01 --weight-decay 1e-4 --num-workers 4 --early-stop-patience 5 --early-stop-min-delta 0.1 --seeds 42,2024,3407 --run-name resnet50_baseline_224_3seeds
 ```
 
 ### Block D：SwinV2-Tiny 训练命令
 
 ```powershell
-python main.py --mode train --model swinv2_tiny --batch-size 8 --image-size 448 --resize-size 512 --epochs 50 --optimizer adamw --lr 2e-5 --weight-decay 0.05 --num-workers 4 --early-stop-patience 5 --early-stop-min-delta 0.1 --seeds 42,2024,3407 --run-name blockD_swinv2_tiny_1k_448 --no-parts
+python main.py --mode train --model swinv2_tiny --batch-size 8 --image-size 224 --resize-size 256 --epochs 50 --optimizer adamw --lr 2e-5 --weight-decay 0.05 --num-workers 4 --early-stop-patience 5 --early-stop-min-delta 0.1 --seeds 42,2024,3407 --run-name blockD_swinv2_tiny_224_3seeds --no-parts
 ```
 
-该命令使用 ImageNet-1K 预训练的 SwinV2-Tiny 作为 Block D，对 CUB-200-2011 进行 448x448 高分辨率微调。代码会先加载 `swinv2_tiny_window16_256` 预训练权重，再通过 timm 的 `set_input_size` 适配到 448x448 输入。若显存不足，优先把 `--batch-size 8` 改为 `--batch-size 4`，仍不足再改为 `--batch-size 2`。
+该命令使用 ImageNet-1K 预训练的 SwinV2-Tiny 作为 Block D，对 CUB-200-2011 进行默认 224x224 输入微调。代码会先加载 `swinv2_tiny_window16_256` 预训练权重，再通过 timm 的 `set_input_size` 适配到当前输入尺寸。若显存不足，优先把 `--batch-size 8` 改为 `--batch-size 4`，仍不足再改为 `--batch-size 2`。
 
 ## 输出位置
 
@@ -123,13 +127,13 @@ ckpt\<model>\
 Block B 原图基线：
 
 ```powershell
-python main.py --mode summarize --model resnet50_baseline --seeds 42,2024,3407 --run-name resnet50_baseline_3seeds
+python main.py --mode summarize --model resnet50_baseline --seeds 42,2024,3407 --run-name resnet50_baseline_224_3seeds
 ```
 
 Block C bbox 裁剪：
 
 ```powershell
-python main.py --mode summarize --model resnet50_baseline --seeds 42,2024,3407 --run-name blockC_bbox_crop
+python main.py --mode summarize --model resnet50_baseline --seeds 42,2024,3407 --run-name blockC_bbox_crop_224_3seeds
 ```
 
 命令会在对应的 `run-name` 目录中生成：
@@ -150,7 +154,7 @@ python main.py --mode smoke --num-workers 0
 然后运行一个很短的 ResNet50 调试实验：
 
 ```powershell
-python main.py --mode train --model resnet50_baseline --batch-size 2 --image-size 224 --resize-size 256 --epochs 1 --num-workers 4 --seeds 1,2 --run-name debug_resnet --max-train-batches 1 --max-val-batches 1 --no-pretrained
+python main.py --mode train --model resnet50_baseline --batch-size 2 --image-size 224 --resize-size 256 --epochs 1 --num-workers 4 --seeds 1,2 --run-name debug_resnet50_baseline_224 --max-train-batches 1 --max-val-batches 1 --no-pretrained
 ```
 
 确认流程正常后，再使用正式命令训练。调试命令里加了 `--no-pretrained`，可以避免联网下载权重导致调试中断。
