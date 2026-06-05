@@ -94,6 +94,14 @@ python main.py --mode train --model resnet50_baseline --no-pretrained --batch-si
 python main.py --mode train --model resnet50_baseline --batch-size 16 --image-size 448 --resize-size 512 --epochs 50 --optimizer sgd --lr 0.01 --weight-decay 1e-4 --num-workers 4 --early-stop-patience 5 --early-stop-min-delta 0.1 --seeds 42,2024,3407 --run-name resnet50_baseline_3seeds
 ```
 
+### Block D：SwinV2-Tiny 训练命令
+
+```powershell
+python main.py --mode train --model swinv2_tiny --batch-size 8 --image-size 448 --resize-size 512 --epochs 50 --optimizer adamw --lr 2e-5 --weight-decay 0.05 --num-workers 4 --early-stop-patience 5 --early-stop-min-delta 0.1 --seeds 42,2024,3407 --run-name blockD_swinv2_tiny_1k_448 --no-parts
+```
+
+该命令使用 ImageNet-1K 预训练的 SwinV2-Tiny 作为 Block D，对 CUB-200-2011 进行 448x448 高分辨率微调。代码会先加载 `swinv2_tiny_window16_256` 预训练权重，再通过 timm 的 `set_input_size` 适配到 448x448 输入。若显存不足，优先把 `--batch-size 8` 改为 `--batch-size 4`，仍不足再改为 `--batch-size 2`。
+
 ## 输出位置
 
 训练日志和指标默认保存到：

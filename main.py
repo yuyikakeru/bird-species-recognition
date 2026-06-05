@@ -10,7 +10,7 @@ from torch import nn
 
 from config import build_config
 from data_utils import build_dataloader, summarize_batch
-from model import build_resnet50_baseline
+from model import build_resnet50_baseline, build_swinv2_tiny_baseline
 from trainer import Trainer
 from utils import get_device, mean_std, save_csv, save_json, set_seed
 
@@ -87,9 +87,15 @@ def build_model(cfg) -> nn.Module:
             num_classes=cfg.model.num_classes,
             pretrained=cfg.model.pretrained,
         )
+    if cfg.model.name in {"swinv2_tiny", "swinv2_tiny_baseline", "blockD_swinv2_tiny"}:
+        return build_swinv2_tiny_baseline(
+            num_classes=cfg.model.num_classes,
+            pretrained=cfg.model.pretrained,
+            image_size=cfg.data.image_size,
+        )
     raise ValueError(
         f"Model '{cfg.model.name}' is not implemented yet. "
-        "Available models: smoke, resnet50_baseline."
+        "Available models: smoke, resnet50_baseline, swinv2_tiny."
     )
 
 
