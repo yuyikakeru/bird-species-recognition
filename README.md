@@ -101,10 +101,10 @@ python main.py --mode train --model resnet50_baseline --batch-size 16 --image-si
 ### Block D：SwinV2-Tiny 训练命令
 
 ```powershell
-python main.py --mode train --model swinv2_tiny --batch-size 8 --image-size 224 --resize-size 256 --epochs 50 --optimizer adamw --lr 2e-5 --weight-decay 0.05 --num-workers 4 --early-stop-patience 5 --early-stop-min-delta 0.1 --seeds 42,2024,3407 --run-name blockD_swinv2_tiny_224_3seeds --no-parts
+python main.py --mode train --model swinv2_tiny --batch-size 16 --image-size 224 --resize-size 256 --epochs 50 --optimizer adamw --lr 5e-5 --weight-decay 0.05 --num-workers 4 --early-stop-patience 5 --early-stop-min-delta 0.05 --seeds 42,2024,3407 --run-name blockD_swinv2_tiny_224_3seeds --no-parts
 ```
 
-该命令使用 ImageNet-1K 预训练的 SwinV2-Tiny 作为 Block D，对 CUB-200-2011 进行默认 224x224 输入微调。代码会先加载 `swinv2_tiny_window16_256` 预训练权重，再通过 timm 的 `set_input_size` 适配到当前输入尺寸。若显存不足，优先把 `--batch-size 8` 改为 `--batch-size 4`，仍不足再改为 `--batch-size 2`。
+该命令使用 ImageNet-1K 预训练的 SwinV2-Tiny 作为 Block D，对 CUB-200-2011 进行默认 224x224 输入微调。代码会先加载 `swinv2_tiny_window16_256` 预训练权重，再通过 timm 的 `set_input_size` 适配到当前输入尺寸。若显存不足，优先把 `--batch-size 16` 改为 `--batch-size 8`，仍不足再改为 `--batch-size 4`。
 
 ## 输出位置
 
