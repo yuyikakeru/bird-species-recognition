@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Optional
 
 
 PROJECT_ROOT = Path(__file__).resolve().parent
@@ -24,7 +23,7 @@ class DataConfig:
 
 @dataclass
 class TrainConfig:
-    epochs: int = 1
+    epochs: int = 80
     lr: float = 0.01
     weight_decay: float = 1e-4
     optimizer: str = "sgd"
@@ -48,7 +47,7 @@ class ModelConfig:
     name: str = "smoke"
     num_classes: int = 200
     pretrained: bool = True
-    checkpoint: Optional[Path] = None
+    fpn_channels: int = 256
 
 
 @dataclass
@@ -76,6 +75,4 @@ def build_config(**overrides: object) -> ExperimentConfig:
     cfg.data.root = Path(cfg.data.root)
     cfg.train.output_dir = Path(cfg.train.output_dir)
     cfg.train.ckpt_dir = Path(cfg.train.ckpt_dir)
-    if cfg.model.checkpoint is not None:
-        cfg.model.checkpoint = Path(cfg.model.checkpoint)
     return cfg

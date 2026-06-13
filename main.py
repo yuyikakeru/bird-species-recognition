@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import copy
 import json
+import os
 from pathlib import Path
 
 import torch
@@ -10,7 +11,11 @@ from torch import nn
 
 from config import build_config
 from data_utils import build_dataloader, summarize_batch
-from model import build_resnet50_baseline, build_swinv2_tiny_baseline
+from model import (
+    build_resnet50_baseline,
+    build_swinv2_tiny_baseline,
+    build_swinv2_tiny_fpn,
+)
 from trainer import Trainer
 from utils import get_device, mean_std, save_csv, save_json, set_seed
 
@@ -29,6 +34,46 @@ class SmokeClassifier(nn.Module):
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         return self.net(x)
+
+
+class RunLock:
+    def __init__(self, lock_path: Path) -> None:
+        self.lock_path = lock_path
+        self.fd: int | None = None
+
+    def __enter__(self) -> "RunLock":
+        self.lock_path.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            self.fd = os.open(
+                self.lock_path,
+                os.O_CREAT | os.O_EXCL | os.O_WRONLY,
+            )
+        except FileExistsError as exc:
+            lock_text = self.lock_path.read_text(encoding="utf-8", errors="replace")
+            raise RuntimeError(
+                f"Run lock already exists: {self.lock_path}\n"
+                "Another training process may be writing this run directory. "
+                "Use a different --run-name, wait for it to finish, or remove the "
+                "single stale lock file manually if no matching process is running.\n"
+                f"Lock content: {lock_text}"
+            ) from exc
+
+        payload = {
+            "pid": os.getpid(),
+            "cwd": str(Path.cwd()),
+            "lock_path": str(self.lock_path),
+        }
+        os.write(self.fd, json.dumps(payload, ensure_ascii=False, indent=2).encode("utf-8"))
+        os.close(self.fd)
+        self.fd = None
+        return self
+
+    def __exit__(self, exc_type, exc, tb) -> None:
+        if self.fd is not None:
+            os.close(self.fd)
+            self.fd = None
+        if self.lock_path.exists():
+            self.lock_path.unlink()
 
 
 def parse_args() -> argparse.Namespace:
@@ -66,6 +111,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--use-bbox-crop", action="store_true")
     parser.add_argument("--no-parts", action="store_true")
     parser.add_argument("--no-pretrained", dest="pretrained", action="store_false")
+    parser.add_argument("--fpn-channels", type=int, default=None)
     parser.set_defaults(pretrained=None)
     return parser.parse_args()
 
@@ -93,23 +139,33 @@ def build_model(cfg) -> nn.Module:
             pretrained=cfg.model.pretrained,
             image_size=cfg.data.image_size,
         )
+    if cfg.model.name in {"swinv2_tiny_fpn", "blockE_swinv2_tiny_fpn"}:
+        return build_swinv2_tiny_fpn(
+            num_classes=cfg.model.num_classes,
+            pretrained=cfg.model.pretrained,
+            image_size=cfg.data.image_size,
+            fpn_channels=cfg.model.fpn_channels,
+        )
     raise ValueError(
         f"Model '{cfg.model.name}' is not implemented yet. "
-        "Available models: smoke, resnet50_baseline, swinv2_tiny."
+        "Available models: smoke, resnet50_baseline, swinv2_tiny, swinv2_tiny_fpn."
     )
 
 
 def build_optimizer(cfg, model: nn.Module) -> torch.optim.Optimizer:
+    trainable_params = [p for p in model.parameters() if p.requires_grad]
+    if not trainable_params:
+        raise ValueError("No trainable parameters found for optimizer.")
     if cfg.train.optimizer == "sgd":
         return torch.optim.SGD(
-            model.parameters(),
+            trainable_params,
             lr=cfg.train.lr,
             momentum=cfg.train.momentum,
             weight_decay=cfg.train.weight_decay,
         )
     if cfg.train.optimizer == "adamw":
         return torch.optim.AdamW(
-            model.parameters(),
+            trainable_params,
             lr=cfg.train.lr,
             weight_decay=cfg.train.weight_decay,
         )
@@ -194,23 +250,24 @@ def run_repeated_train(cfg, seeds: list[int], run_name: str | None = None) -> No
     base_ckpt_dir = Path(cfg.train.ckpt_dir) / cfg.model.name / experiment_name
     rows = []
 
-    for run_index, seed in enumerate(seeds, start=1):
-        run_cfg = copy.deepcopy(cfg)
-        run_cfg.train.seed = seed
-        run_cfg.train.output_dir = base_output_dir / f"seed_{seed}"
-        run_cfg.train.ckpt_dir = base_ckpt_dir / f"seed_{seed}"
+    with RunLock(base_output_dir / ".run.lock"):
+        for run_index, seed in enumerate(seeds, start=1):
+            run_cfg = copy.deepcopy(cfg)
+            run_cfg.train.seed = seed
+            run_cfg.train.output_dir = base_output_dir / f"seed_{seed}"
+            run_cfg.train.ckpt_dir = base_ckpt_dir / f"seed_{seed}"
 
-        print(f"run={run_index}/{len(seeds)} seed={seed}")
-        set_seed(seed)
-        metrics = run_train(run_cfg)
-        row = {"run": run_index, "seed": seed, **metrics}
-        rows.append(row)
+            print(f"run={run_index}/{len(seeds)} seed={seed}")
+            set_seed(seed)
+            metrics = run_train(run_cfg)
+            row = {"run": run_index, "seed": seed, **metrics}
+            rows.append(row)
 
-    if len(rows) == 1:
-        print("final_metrics", rows[0])
-        return
+        if len(rows) == 1:
+            print("final_metrics", rows[0])
+            return
 
-    save_repeat_summary(cfg, seeds, rows, base_output_dir)
+        save_repeat_summary(cfg, seeds, rows, base_output_dir)
 
 
 def run_summarize(cfg, seeds: list[int], run_name: str | None = None) -> None:
@@ -274,6 +331,7 @@ def main() -> None:
         use_bbox_crop=args.use_bbox_crop,
         return_parts=not args.no_parts,
         pretrained=args.pretrained,
+        fpn_channels=args.fpn_channels,
         name=args.model,
     )
 
