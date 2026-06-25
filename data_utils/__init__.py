@@ -1,4 +1,4 @@
-from .data_loader import CUBDataset, build_dataloader, build_dataset, summarize_batch
+from .data_loader import CUBDataset, build_dataloader, build_dataset
 from .transform import build_transforms
 
 __all__ = [
@@ -6,5 +6,4 @@ __all__ = [
     "build_dataloader",
     "build_dataset",
     "build_transforms",
-    "summarize_batch",
 ]

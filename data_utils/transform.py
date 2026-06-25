@@ -1,10 +1,78 @@
 from __future__ import annotations
 
+import torch
 from torchvision import transforms
+from torchvision.transforms import functional as TF
 
 
 IMAGENET_MEAN = (0.485, 0.456, 0.406)
 IMAGENET_STD = (0.229, 0.224, 0.225)
+
+
+class ImageTransform:
+    """Image preprocessing for training and evaluation."""
+
+    def __init__(
+        self,
+        split: str,
+        image_size: int,
+        resize_size: int,
+        use_bbox_crop: bool,
+    ) -> None:
+        self.training = split in {"train", "train_full"}
+        self.image_size = image_size
+        self.resize_size = resize_size
+        self.use_bbox_crop = use_bbox_crop
+        self.color_jitter = transforms.ColorJitter(
+            brightness=0.2,
+            contrast=0.2,
+            saturation=0.2,
+            hue=0.02,
+        )
+
+    def __call__(self, image):
+        if self.training:
+            if self.use_bbox_crop:
+                image = TF.resize(
+                    image,
+                    [self.image_size, self.image_size],
+                    antialias=True,
+                )
+            else:
+                top, left, height, width = transforms.RandomResizedCrop.get_params(
+                    image,
+                    scale=(0.65, 1.0),
+                    ratio=(3.0 / 4.0, 4.0 / 3.0),
+                )
+                image = TF.resized_crop(
+                    image,
+                    top,
+                    left,
+                    height,
+                    width,
+                    [self.image_size, self.image_size],
+                    antialias=True,
+                )
+
+            if bool(torch.rand(()) < 0.5):
+                image = TF.hflip(image)
+            image = self.color_jitter(image)
+        elif self.use_bbox_crop:
+            image = TF.resize(
+                image,
+                [self.image_size, self.image_size],
+                antialias=True,
+            )
+        else:
+            image = TF.resize(image, self.resize_size, antialias=True)
+            image = TF.center_crop(image, [self.image_size, self.image_size])
+
+        image_tensor = TF.normalize(
+            TF.to_tensor(image),
+            IMAGENET_MEAN,
+            IMAGENET_STD,
+        )
+        return image_tensor
 
 
 def build_transforms(
@@ -12,43 +80,7 @@ def build_transforms(
     image_size: int = 448,
     resize_size: int = 512,
     use_bbox_crop: bool = False,
-):
-    if split == "train":
-        spatial_transform = (
-            [transforms.Resize((image_size, image_size))]
-            if use_bbox_crop
-            else [transforms.RandomResizedCrop(image_size, scale=(0.65, 1.0))]
-        )
-        return transforms.Compose(
-            spatial_transform
-            + [
-                transforms.RandomHorizontalFlip(),
-                transforms.ColorJitter(
-                    brightness=0.2,
-                    contrast=0.2,
-                    saturation=0.2,
-                    hue=0.02,
-                ),
-                transforms.ToTensor(),
-                transforms.Normalize(IMAGENET_MEAN, IMAGENET_STD),
-            ]
-        )
-
-    if split in {"val", "test"}:
-        spatial_transform = (
-            [transforms.Resize((image_size, image_size))]
-            if use_bbox_crop
-            else [
-                transforms.Resize(resize_size),
-                transforms.CenterCrop(image_size),
-            ]
-        )
-        return transforms.Compose(
-            spatial_transform
-            + [
-                transforms.ToTensor(),
-                transforms.Normalize(IMAGENET_MEAN, IMAGENET_STD),
-            ]
-        )
-
-    raise ValueError(f"Unsupported split: {split}")
+) -> ImageTransform:
+    if split not in {"train", "val", "train_full", "test"}:
+        raise ValueError(f"Unsupported split: {split}")
+    return ImageTransform(split, image_size, resize_size, use_bbox_crop)

@@ -1,0 +1,25 @@
+{
+  "candidates": [
+    {
+      "id": "lr_3e-5",
+      "lr": 0.00003,
+      "weight_decay": 0.05,
+      "head_lr_mult": 5.0,
+      "label_smoothing": 0.1
+    },
+    {
+      "id": "lr_5e-5",
+      "lr": 0.00005,
+      "weight_decay": 0.05,
+      "head_lr_mult": 5.0,
+      "label_smoothing": 0.1
+    },
+    {
+      "id": "lr_1e-4",
+      "lr": 0.0001,
+      "weight_decay": 0.05,
+      "head_lr_mult": 5.0,
+      "label_smoothing": 0.1
+    }
+  ]
+}

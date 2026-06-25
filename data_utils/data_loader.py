@@ -1,9 +1,9 @@
 from __future__ import annotations
 
+import random
+from collections import defaultdict
 from pathlib import Path
-from typing import Dict, Iterable, List, Optional, Tuple
 
-import torch
 from PIL import Image
 from torch.utils.data import DataLoader, Dataset
 
@@ -11,7 +11,7 @@ from .transform import build_transforms
 
 
 class CUBDataset(Dataset):
-    """CUB_200_2011 dataset with optional bbox crop and part metadata."""
+    """CUB_200_2011 classification dataset with an optional bbox crop."""
 
     def __init__(
         self,
@@ -20,17 +20,34 @@ class CUBDataset(Dataset):
         transform=None,
         use_bbox_crop: bool = False,
         bbox_margin: float = 0.2,
-        return_parts: bool = True,
+        val_ratio: float = 0.2,
+        split_seed: int = 42,
     ) -> None:
         self.root = Path(root)
         self.split = split
         self.transform = transform
         self.use_bbox_crop = use_bbox_crop
         self.bbox_margin = bbox_margin
-        self.return_parts = return_parts
+        self.val_ratio = val_ratio
+        self.split_seed = split_seed
 
-        if split not in {"train", "val", "test"}:
+        if split not in {"train", "val", "train_full", "test"}:
             raise ValueError(f"Unsupported split: {split}")
+        if not 0.0 < val_ratio < 1.0:
+            raise ValueError(f"val_ratio must be between 0 and 1, got {val_ratio}")
+
+        required_files = [
+            self.root / "images.txt",
+            self.root / "image_class_labels.txt",
+            self.root / "train_test_split.txt",
+        ]
+        if use_bbox_crop:
+            required_files.append(self.root / "bounding_boxes.txt")
+        missing_files = [str(path) for path in required_files if not path.is_file()]
+        if missing_files:
+            raise FileNotFoundError(
+                "CUB dataset is incomplete; missing: " + ", ".join(missing_files)
+            )
 
         self.images = self._read_id_to_str(self.root / "images.txt")
         self.labels = {
@@ -39,64 +56,89 @@ class CUBDataset(Dataset):
                 self.root / "image_class_labels.txt"
             ).items()
         }
-        self.classes = {
-            int(class_id) - 1: name
-            for class_id, name in self._read_id_to_str(self.root / "classes.txt").items()
-        }
         self.split_flags = {
             image_id: int(flag)
             for image_id, flag in self._read_id_to_str(
                 self.root / "train_test_split.txt"
             ).items()
         }
-        self.bboxes = self._read_bboxes(self.root / "bounding_boxes.txt")
-        self.parts = self._read_parts(self.root / "parts" / "part_locs.txt")
+        self.bboxes = (
+            self._read_bboxes(self.root / "bounding_boxes.txt")
+            if use_bbox_crop
+            else {}
+        )
 
-        expected_flag = 1 if split == "train" else 0
-        self.image_ids = [
-            image_id
-            for image_id in sorted(self.images)
-            if self.split_flags[image_id] == expected_flag
+        image_ids = set(self.images)
+        if image_ids != set(self.labels) or image_ids != set(self.split_flags):
+            raise ValueError(
+                "images.txt, image_class_labels.txt, and train_test_split.txt "
+                "must contain the same image IDs."
+            )
+        if use_bbox_crop and not image_ids.issubset(self.bboxes):
+            raise ValueError("bounding_boxes.txt is missing one or more image IDs.")
+
+        official_train_ids = [
+            image_id for image_id in sorted(self.images) if self.split_flags[image_id] == 1
         ]
+        official_test_ids = [
+            image_id for image_id in sorted(self.images) if self.split_flags[image_id] == 0
+        ]
+
+        if split == "test":
+            self.image_ids = official_test_ids
+        elif split == "train_full":
+            self.image_ids = official_train_ids
+        else:
+            train_ids, val_ids = self._stratified_train_val_split(official_train_ids)
+            self.image_ids = train_ids if split == "train" else val_ids
 
     def __len__(self) -> int:
         return len(self.image_ids)
 
-    def __getitem__(self, index: int) -> Dict[str, object]:
+    def _stratified_train_val_split(
+        self, image_ids: list[int]
+    ) -> tuple[list[int], list[int]]:
+        ids_by_label: dict[int, list[int]] = defaultdict(list)
+        for image_id in image_ids:
+            ids_by_label[self.labels[image_id]].append(image_id)
+
+        rng = random.Random(self.split_seed)
+        train_ids: list[int] = []
+        val_ids: list[int] = []
+        for label in sorted(ids_by_label):
+            class_ids = ids_by_label[label]
+            rng.shuffle(class_ids)
+            val_count = min(
+                max(1, round(len(class_ids) * self.val_ratio)),
+                len(class_ids) - 1,
+            )
+            val_ids.extend(class_ids[:val_count])
+            train_ids.extend(class_ids[val_count:])
+
+        return sorted(train_ids), sorted(val_ids)
+
+    def __getitem__(self, index: int) -> dict[str, object]:
         image_id = self.image_ids[index]
         relative_path = self.images[image_id]
         image_path = self.root / "images" / relative_path
 
-        image = Image.open(image_path).convert("RGB")
-        bbox = self.bboxes.get(image_id, (0.0, 0.0, 0.0, 0.0))
+        with Image.open(image_path) as source:
+            image = source.convert("RGB")
 
         if self.use_bbox_crop:
-            image = self._crop_with_bbox(image, bbox)
+            image = self._crop_with_bbox(image, self.bboxes[image_id])
 
         if self.transform is not None:
             image = self.transform(image)
 
-        label = self.labels[image_id]
-        sample: Dict[str, object] = {
+        return {
             "image": image,
-            "label": torch.tensor(label, dtype=torch.long),
-            "image_id": torch.tensor(image_id, dtype=torch.long),
-            "path": str(image_path),
-            "class_name": self.classes[label],
-            "bbox": torch.tensor(bbox, dtype=torch.float32),
+            "label": self.labels[image_id],
         }
 
-        if self.return_parts:
-            sample["parts"] = torch.tensor(
-                self.parts.get(image_id, self._empty_parts()),
-                dtype=torch.float32,
-            )
-
-        return sample
-
     @staticmethod
-    def _read_id_to_str(path: Path) -> Dict[int, str]:
-        values: Dict[int, str] = {}
+    def _read_id_to_str(path: Path) -> dict[int, str]:
+        values: dict[int, str] = {}
         with path.open("r", encoding="utf-8") as handle:
             for line in handle:
                 line = line.strip()
@@ -107,39 +149,18 @@ class CUBDataset(Dataset):
         return values
 
     @staticmethod
-    def _read_bboxes(path: Path) -> Dict[int, Tuple[float, float, float, float]]:
-        values: Dict[int, Tuple[float, float, float, float]] = {}
+    def _read_bboxes(path: Path) -> dict[int, tuple[float, float, float, float]]:
+        values: dict[int, tuple[float, float, float, float]] = {}
         with path.open("r", encoding="utf-8") as handle:
             for line in handle:
                 image_id, x, y, width, height = line.strip().split()
                 values[int(image_id)] = (float(x), float(y), float(width), float(height))
         return values
 
-    @staticmethod
-    def _empty_parts() -> List[List[float]]:
-        return [[0.0, 0.0, 0.0] for _ in range(15)]
-
-    @classmethod
-    def _read_parts(cls, path: Path) -> Dict[int, List[List[float]]]:
-        if not path.exists():
-            return {}
-
-        values: Dict[int, List[List[float]]] = {}
-        with path.open("r", encoding="utf-8") as handle:
-            for line in handle:
-                image_id, part_id, x, y, visible = line.strip().split()
-                image_id_int = int(image_id)
-                part_index = int(part_id) - 1
-                values.setdefault(image_id_int, cls._empty_parts())
-                values[image_id_int][part_index] = [
-                    float(x),
-                    float(y),
-                    float(visible),
-                ]
-        return values
-
     def _crop_with_bbox(
-        self, image: Image.Image, bbox: Tuple[float, float, float, float]
+        self,
+        image: Image.Image,
+        bbox: tuple[float, float, float, float],
     ) -> Image.Image:
         x, y, width, height = bbox
         if width <= 0 or height <= 0:
@@ -168,14 +189,15 @@ def build_dataset(cfg, split: str) -> CUBDataset:
         transform=transform,
         use_bbox_crop=cfg.data.use_bbox_crop,
         bbox_margin=cfg.data.bbox_margin,
-        return_parts=cfg.data.return_parts,
+        val_ratio=cfg.data.val_ratio,
+        split_seed=cfg.data.split_seed,
     )
 
 
-def build_dataloader(cfg, split: str, shuffle: Optional[bool] = None) -> DataLoader:
+def build_dataloader(cfg, split: str, shuffle: bool | None = None) -> DataLoader:
     dataset = build_dataset(cfg, split)
     if shuffle is None:
-        shuffle = split == "train"
+        shuffle = split in {"train", "train_full"}
 
     return DataLoader(
         dataset,
@@ -183,21 +205,5 @@ def build_dataloader(cfg, split: str, shuffle: Optional[bool] = None) -> DataLoa
         shuffle=shuffle,
         num_workers=cfg.data.num_workers,
         pin_memory=cfg.data.pin_memory,
+        persistent_workers=cfg.data.num_workers > 0,
     )
-
-
-def summarize_batch(batch: Dict[str, object]) -> Dict[str, object]:
-    summary = {
-        "image_shape": tuple(batch["image"].shape),
-        "label_shape": tuple(batch["label"].shape),
-        "first_image_id": int(batch["image_id"][0]),
-        "first_label": int(batch["label"][0]),
-        "first_path": batch["path"][0],
-        "has_bbox": "bbox" in batch,
-        "has_parts": "parts" in batch,
-    }
-    if "bbox" in batch:
-        summary["bbox_shape"] = tuple(batch["bbox"].shape)
-    if "parts" in batch:
-        summary["parts_shape"] = tuple(batch["parts"].shape)
-    return summary
