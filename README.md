@@ -164,9 +164,15 @@ python main.py --mode pipeline --model convnextv2_tiny_dca_region --search-space
 
 ## Web 演示系统
 
-`bird_web_app/` 是基于最终高分辨率 ConvNeXtV2 DCA-Region 模型的鸟类识别 Web 演示系统，用于本地演示和答辩展示。
+`bird_web_app/` 是基于最终高分辨率 ConvNeXtV2 DCA-Region 模型的鸟类识别 Web 演示系统，用于网页端鸟类图片识别和答辩展示。网站已部署到腾讯云服务器。
 
-从项目根目录启动本地服务：
+公网访问地址：
+
+```text
+http://81.68.255.235
+```
+
+本地测试时，可从项目根目录启动服务：
 
 ```powershell
 python .\bird_web_app\server.py --host 0.0.0.0 --port 8000 --warmup
@@ -178,13 +184,7 @@ python .\bird_web_app\server.py --host 0.0.0.0 --port 8000 --warmup
 http://127.0.0.1:8000
 ```
 
-生成临时公网 HTTPS 地址：
-
-```powershell
-.\bird_web_app\start_public.ps1
-```
-
-网页支持上传任意尺寸、任意比例的鸟类图片，展示输入图片、模型预测的英文鸟类类别、置信度、候选类别，并在联网可用时根据英文类别获取 English Wikipedia 描述。当前网站属于本地部署演示系统，可通过临时公网隧道访问，尚未进行长期稳定的正式云端上线部署。
+网页支持上传任意尺寸、任意比例的鸟类图片，展示输入图片、模型预测的英文鸟类类别、置信度、候选类别，并在联网可用时根据英文类别获取 English Wikipedia 描述。
 
 ## 输出
 
