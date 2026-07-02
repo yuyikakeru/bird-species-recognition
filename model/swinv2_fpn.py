@@ -7,16 +7,14 @@ from torch import nn
 from .swinv2_baseline import build_swinv2_tiny_backbone
 
 
-def make_group_norm(num_channels: int) -> nn.GroupNorm:
-    for num_groups in (32, 16, 8, 4, 2):
-        if num_channels % num_groups == 0:
-            return nn.GroupNorm(num_groups, num_channels)
-    return nn.GroupNorm(1, num_channels)
-
-
 class ConvNormAct(nn.Sequential):
-    def __init__(self, in_channels: int, out_channels: int, kernel_size: int) -> None:
-        padding = kernel_size // 2
+    def __init__(
+        self,
+        in_channels: int,
+        out_channels: int,
+        kernel_size: int,
+        padding: int = 0,
+    ) -> None:
         super().__init__(
             nn.Conv2d(
                 in_channels,
@@ -25,29 +23,13 @@ class ConvNormAct(nn.Sequential):
                 padding=padding,
                 bias=False,
             ),
-            make_group_norm(out_channels),
+            nn.BatchNorm2d(out_channels),
             nn.GELU(),
         )
-
-
-class AttentionPool2d(nn.Module):
-    def __init__(self, channels: int) -> None:
-        super().__init__()
-        hidden_channels = max(channels // 4, 32)
-        self.score = nn.Sequential(
-            nn.Conv2d(channels, hidden_channels, kernel_size=1),
-            nn.GELU(),
-            nn.Conv2d(hidden_channels, 1, kernel_size=1),
-        )
-
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        weights = self.score(x).flatten(2).softmax(dim=-1)
-        values = x.flatten(2)
-        return torch.sum(values * weights, dim=-1)
 
 
 class SwinV2TinyFPN(nn.Module):
-    """SwinV2-Tiny with top-down C2/C3/C4 fusion for fine-grained cues."""
+    """Fuse SwinV2 stage-3 and stage-4 features with a lightweight FPN head."""
 
     def __init__(
         self,
@@ -57,52 +39,30 @@ class SwinV2TinyFPN(nn.Module):
         fpn_channels: int = 256,
     ) -> None:
         super().__init__()
+        if fpn_channels < 1:
+            raise ValueError(f"fpn_channels must be positive, got {fpn_channels}")
+
         self.backbone = build_swinv2_tiny_backbone(
             num_classes=num_classes,
             pretrained=pretrained,
             image_size=image_size,
         )
+        self.fpn_channels = fpn_channels
+        self.baseline_logit_scale = 1.0
+        self.fpn_logit_scale = 1.0
 
-        self.lateral_c2 = ConvNormAct(192, fpn_channels, kernel_size=1)
-        self.lateral_c3 = ConvNormAct(384, fpn_channels, kernel_size=1)
-        self.lateral_c4 = ConvNormAct(768, fpn_channels, kernel_size=1)
-        self.smooth_p2 = ConvNormAct(fpn_channels, fpn_channels, kernel_size=3)
-        self.smooth_p3 = ConvNormAct(fpn_channels, fpn_channels, kernel_size=3)
-        self.smooth_p4 = ConvNormAct(fpn_channels, fpn_channels, kernel_size=3)
-        self.fusion = nn.Sequential(
-            ConvNormAct(fpn_channels * 3, fpn_channels, kernel_size=3),
-            ConvNormAct(fpn_channels, fpn_channels, kernel_size=3),
-        )
-        self.pool_p2 = AttentionPool2d(fpn_channels)
-        self.pool_p3 = AttentionPool2d(fpn_channels)
-        self.pool_p4 = AttentionPool2d(fpn_channels)
-        self.pool_fused = AttentionPool2d(fpn_channels)
-        self.scale_mixer = nn.Sequential(
-            nn.LayerNorm(fpn_channels * 4),
-            nn.Linear(fpn_channels * 4, fpn_channels * 2),
-            nn.GELU(),
-            nn.Dropout(p=0.2),
-            nn.Linear(fpn_channels * 2, fpn_channels),
-        )
-        self.fpn_norm = nn.LayerNorm(fpn_channels)
-        self.fpn_drop = nn.Dropout(p=0.1)
+        self.stage3_lateral = ConvNormAct(384, fpn_channels, kernel_size=1)
+        self.stage4_lateral = ConvNormAct(768, fpn_channels, kernel_size=1)
+        self.fpn_smooth = ConvNormAct(fpn_channels, fpn_channels, kernel_size=3, padding=1)
+        self.fpn_attention = nn.Conv2d(fpn_channels, 1, kernel_size=1)
         self.fpn_classifier = nn.Linear(fpn_channels, num_classes)
-        self.residual_gate = nn.Sequential(
-            nn.LayerNorm(fpn_channels),
-            nn.Linear(fpn_channels, max(fpn_channels // 4, 32)),
-            nn.GELU(),
-            nn.Linear(max(fpn_channels // 4, 32), 1),
-        )
-        self.residual_gate_bias = nn.Parameter(torch.tensor(-2.0))
+        self._init_fpn_head()
 
-        self._init_residual_head()
-
-    def _init_residual_head(self) -> None:
+    def _init_fpn_head(self) -> None:
+        nn.init.zeros_(self.fpn_attention.weight)
+        nn.init.zeros_(self.fpn_attention.bias)
         nn.init.trunc_normal_(self.fpn_classifier.weight, std=0.02)
         nn.init.zeros_(self.fpn_classifier.bias)
-        final_gate = self.residual_gate[-1]
-        nn.init.zeros_(final_gate.weight)
-        nn.init.zeros_(final_gate.bias)
 
     def get_optimizer_param_groups(
         self,
@@ -114,14 +74,12 @@ class SwinV2TinyFPN(nn.Module):
         for name, param in self.named_parameters():
             if not param.requires_grad:
                 continue
-
             is_head = not name.startswith("backbone.")
             lr = base_lr * (head_lr_mult if is_head else 1.0)
             decay = 0.0 if self._should_skip_weight_decay(name, param) else weight_decay
             key = (lr, decay)
             groups.setdefault(key, {"params": [], "lr": lr, "weight_decay": decay})
             groups[key]["params"].append(param)
-
         return list(groups.values())
 
     @staticmethod
@@ -137,92 +95,76 @@ class SwinV2TinyFPN(nn.Module):
         )
 
     @staticmethod
-    def _to_nchw(feature: torch.Tensor) -> torch.Tensor:
-        return feature.permute(0, 3, 1, 2).contiguous()
+    def _to_nchw(features: torch.Tensor) -> torch.Tensor:
+        return features.permute(0, 3, 1, 2).contiguous()
 
-    def _extract_stages(
+    @staticmethod
+    def _attention_pool(
+        feature_map: torch.Tensor,
+        score_map: torch.Tensor,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        batch_size, channels, height, width = feature_map.shape
+        weights = torch.softmax(score_map.flatten(2).squeeze(1), dim=1)
+        flattened = feature_map.flatten(2).transpose(1, 2)
+        pooled = torch.sum(
+            flattened * weights.unsqueeze(-1).to(feature_map.dtype),
+            dim=1,
+        )
+        return pooled, weights.reshape(batch_size, 1, height, width)
+
+    def _extract_stage_features(
         self,
         x: torch.Tensor,
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-        x = self.backbone.patch_embed(x)
-        c2 = c3 = c4 = None
+        features = self.backbone.patch_embed(x)
+        stage3 = None
         for index, layer in enumerate(self.backbone.layers):
-            x = layer(x)
-            if index == 1:
-                c2 = x
-            elif index == 2:
-                c3 = x
-            elif index == 3:
-                c4 = x
+            features = layer(features)
+            if index == 2:
+                stage3 = features
 
-        if c2 is None or c3 is None or c4 is None:
-            raise RuntimeError("Failed to collect C2/C3/C4 SwinV2 stage features.")
-        return c2, c3, c4
+        if stage3 is None:
+            raise RuntimeError("Failed to collect SwinV2 stage-3 features.")
+
+        stage4 = features
+        baseline_logits = self.backbone.forward_head(self.backbone.norm(stage4))
+        return baseline_logits, stage3, stage4
+
+    def _fuse_features(
+        self,
+        stage3: torch.Tensor,
+        stage4: torch.Tensor,
+    ) -> torch.Tensor:
+        stage3_map = self.stage3_lateral(self._to_nchw(stage3))
+        stage4_map = self.stage4_lateral(self._to_nchw(stage4))
+        stage4_map = F.interpolate(
+            stage4_map,
+            size=stage3_map.shape[-2:],
+            mode="bilinear",
+            align_corners=False,
+        )
+        return self.fpn_smooth(stage3_map + stage4_map)
 
     def forward_features(self, x: torch.Tensor) -> dict[str, torch.Tensor]:
-        """Return logits and spatial feature maps for downstream FG modules."""
-        c2, c3, c4 = self._extract_stages(x)
-        baseline_logits = self.backbone.forward_head(self.backbone.norm(c4))
-
-        c2 = self._to_nchw(c2)
-        c3 = self._to_nchw(c3)
-        c4 = self._to_nchw(c4)
-
-        lateral_p2 = self.lateral_c2(c2)
-        lateral_p3 = self.lateral_c3(c3)
-        lateral_p4 = self.lateral_c4(c4)
-
-        p4 = self.smooth_p4(lateral_p4)
-        p3 = lateral_p3 + F.interpolate(
-            p4,
-            size=lateral_p3.shape[-2:],
-            mode="bilinear",
-            align_corners=False,
-        )
-        p3 = self.smooth_p3(p3)
-        p2 = lateral_p2 + F.interpolate(
-            p3,
-            size=lateral_p2.shape[-2:],
-            mode="bilinear",
-            align_corners=False,
-        )
-        p2 = self.smooth_p2(p2)
-
-        target_size = p2.shape[-2:]
-        p3_up = F.interpolate(p3, size=target_size, mode="bilinear", align_corners=False)
-        p4_up = F.interpolate(p4, size=target_size, mode="bilinear", align_corners=False)
-
-        fused = self.fusion(torch.cat([p2, p3_up, p4_up], dim=1))
-        fpn_feature = torch.cat(
-            [
-                self.pool_p2(p2),
-                self.pool_p3(p3),
-                self.pool_p4(p4),
-                self.pool_fused(fused),
-            ],
-            dim=1,
-        )
-        fpn_feature = self.scale_mixer(fpn_feature)
-        fpn_feature = self.fpn_drop(self.fpn_norm(fpn_feature))
+        baseline_logits, stage3, stage4 = self._extract_stage_features(x)
+        fused_map = self._fuse_features(stage3, stage4)
+        fpn_score_map = self.fpn_attention(fused_map)
+        fpn_feature, fpn_attention = self._attention_pool(fused_map, fpn_score_map)
         fpn_logits = self.fpn_classifier(fpn_feature)
-        residual_gate = torch.sigmoid(
-            self.residual_gate(fpn_feature) + self.residual_gate_bias
-        )
-        logits = baseline_logits + residual_gate * fpn_logits
+        logits = self.baseline_logit_scale * baseline_logits + self.fpn_logit_scale * fpn_logits
 
         return {
             "logits": logits,
             "baseline_logits": baseline_logits,
-            "fpn_logits": fpn_logits,
-            "residual_gate": residual_gate,
-            "c2": c2,
-            "c3": c3,
-            "c4": c4,
-            "p2": p2,
-            "p3": p3,
-            "p4": p4,
-            "fused": fused,
+            "baseline_logit_scale": torch.full_like(fpn_logits[:, :1], self.baseline_logit_scale),
+            "stage3_features": stage3,
+            "stage4_features": stage4,
+            "fpn_feature_map": fused_map,
+            "fpn_score_map": fpn_score_map,
+            "fpn_attention": fpn_attention,
             "fpn_feature": fpn_feature,
+            "fpn_logits": fpn_logits,
+            "fpn_gate": torch.full_like(fpn_logits[:, :1], self.fpn_logit_scale),
         }
 
     def forward(

@@ -18,12 +18,14 @@ class CUBDataset(Dataset):
         root: Path | str,
         split: str,
         transform=None,
+        cam_root: Path | str | None = None,
         use_bbox_crop: bool = False,
         bbox_margin: float = 0.2,
         val_ratio: float = 0.2,
         split_seed: int = 42,
     ) -> None:
         self.root = Path(root)
+        self.cam_root = Path(cam_root) if cam_root else None
         self.split = split
         self.transform = transform
         self.use_bbox_crop = use_bbox_crop
@@ -128,13 +130,33 @@ class CUBDataset(Dataset):
         if self.use_bbox_crop:
             image = self._crop_with_bbox(image, self.bboxes[image_id])
 
-        if self.transform is not None:
-            image = self.transform(image)
+        cam_mask = None
+        if self.cam_root is not None:
+            cam_path = self._cam_path(relative_path)
+            if not cam_path.is_file():
+                raise FileNotFoundError(f"Missing CAM mask: {cam_path}")
+            with Image.open(cam_path) as source:
+                cam_mask = source.convert("L")
 
-        return {
+        if self.transform is not None:
+            transformed = self.transform(image, cam_mask)
+            if cam_mask is None:
+                image = transformed
+            else:
+                image, cam_mask = transformed
+
+        item = {
             "image": image,
             "label": self.labels[image_id],
+            "image_id": image_id,
         }
+        if cam_mask is not None:
+            item["cam_mask"] = cam_mask
+        return item
+
+    def _cam_path(self, relative_path: str) -> Path:
+        image_relative_path = Path(relative_path)
+        return self.cam_root / image_relative_path.with_suffix(".png")
 
     @staticmethod
     def _read_id_to_str(path: Path) -> dict[int, str]:
@@ -187,6 +209,7 @@ def build_dataset(cfg, split: str) -> CUBDataset:
         root=cfg.data.root,
         split=split,
         transform=transform,
+        cam_root=cfg.data.cam_root,
         use_bbox_crop=cfg.data.use_bbox_crop,
         bbox_margin=cfg.data.bbox_margin,
         val_ratio=cfg.data.val_ratio,

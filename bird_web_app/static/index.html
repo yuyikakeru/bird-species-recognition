@@ -1,0 +1,72 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>鸟类图像识别</title>
+    <link rel="stylesheet" href="/static/styles.css" />
+  </head>
+  <body>
+    <main class="shell">
+      <section class="intro">
+        <p class="eyebrow">ConvNeXtV2 DCA-Region 448</p>
+        <h1>鸟类图像识别</h1>
+        <p class="lead">
+          上传一张鸟类图片，模型会返回识别类别、置信度、候选类别，并在联网时生成鸟类详细描述。
+        </p>
+      </section>
+
+      <section class="workspace" aria-label="鸟类识别工作区">
+        <form id="uploadForm" class="upload-panel">
+          <label id="dropZone" class="drop-zone" for="imageInput">
+            <input id="imageInput" name="image" type="file" accept="image/*" required />
+            <span class="drop-title">选择鸟类图片</span>
+            <span class="drop-copy">支持任意比例和尺寸，最大 15MB</span>
+          </label>
+          <button id="predictButton" type="submit">开始识别</button>
+          <p id="statusText" class="status">模型会在首次识别时加载，请稍等片刻。</p>
+        </form>
+
+        <article class="result-panel">
+          <div class="image-frame">
+            <img id="previewImage" alt="上传的鸟类图片预览" />
+            <div id="emptyState" class="empty-state">图片预览</div>
+          </div>
+
+          <div class="result-copy">
+            <p class="label">识别结果</p>
+            <h2 id="speciesName">等待上传</h2>
+            <p id="description" class="description">
+              上传图片后，这里会展示模型给出的鸟类类别和详细说明。
+            </p>
+            <p id="sourceLine" class="source-line">说明来源：等待识别</p>
+            <dl class="meta">
+              <div>
+                <dt>置信度</dt>
+                <dd id="confidence">--</dd>
+              </div>
+              <div>
+                <dt>模型</dt>
+                <dd id="modelName">convnextv2_tiny_dca_region</dd>
+              </div>
+              <div>
+                <dt>测试准确率</dt>
+                <dd id="accuracy">90.5247%</dd>
+              </div>
+            </dl>
+          </div>
+        </article>
+
+        <section class="top-list" aria-label="前五个候选类别">
+          <div class="section-head">
+            <p class="label">前五候选</p>
+            <h2>候选类别</h2>
+          </div>
+          <ol id="topList"></ol>
+        </section>
+      </section>
+    </main>
+
+    <script src="/static/app.js"></script>
+  </body>
+</html>

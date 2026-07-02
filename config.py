@@ -7,17 +7,20 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).resolve().parent
 DEFAULT_CUB_ROOT = PROJECT_ROOT / "datasets" / "CUB_200_2011" / "CUB_200_2011"
 SUPPORTED_MODELS = (
+    "convnextv2_tiny",
+    "convnextv2_tiny_dca",
+    "convnextv2_tiny_dca_region",
     "resnet50_baseline",
     "swinv2_tiny",
     "swinv2_tiny_fpn",
     "swinv2_tiny_fpn_parts",
-    "swinv2_tiny_fpn_relation",
 )
 
 
 @dataclass
 class DataConfig:
     root: Path = DEFAULT_CUB_ROOT
+    cam_root: Path | None = None
     image_size: int = 224
     resize_size: int = 256
     batch_size: int = 32
@@ -42,6 +45,7 @@ class TrainConfig:
     seed: int = 42
     device: str = "auto"
     amp: bool = True
+    ema_decay: float = 0.999
     log_interval: int = 20
     grad_clip_norm: float = 1.0
     output_dir: Path = PROJECT_ROOT / "log"
@@ -56,8 +60,7 @@ class ModelConfig:
     fpn_channels: int = 256
     num_parts: int = 6
     part_window_size: int = 3
-    relation_heads: int = 4
-    bilinear_dim: int = 256
+    part_warmup_epochs: int = 10
 
 
 @dataclass
@@ -83,6 +86,7 @@ def build_config(**overrides: object) -> ExperimentConfig:
             raise KeyError(f"Unknown config option: {key}")
 
     cfg.data.root = Path(cfg.data.root)
+    cfg.data.cam_root = Path(cfg.data.cam_root) if cfg.data.cam_root else None
     cfg.train.output_dir = Path(cfg.train.output_dir)
     cfg.train.ckpt_dir = Path(cfg.train.ckpt_dir)
     return validate_config(cfg)
@@ -98,20 +102,27 @@ def validate_config(cfg: ExperimentConfig) -> ExperimentConfig:
         "grad_clip_norm": cfg.train.grad_clip_norm,
         "num_classes": cfg.model.num_classes,
     }
-    if "fpn" in cfg.model.name:
+    if cfg.model.name in {
+        "convnextv2_tiny_dca_region",
+        "swinv2_tiny_fpn",
+        "swinv2_tiny_fpn_parts",
+    }:
         positive_values["fpn_channels"] = cfg.model.fpn_channels
-    if cfg.model.name in {"swinv2_tiny_fpn_parts", "swinv2_tiny_fpn_relation"}:
+    if cfg.model.name in {
+        "swinv2_tiny_fpn_parts",
+    }:
         positive_values["num_parts"] = cfg.model.num_parts
         positive_values["part_window_size"] = cfg.model.part_window_size
-    if cfg.model.name == "swinv2_tiny_fpn_relation":
-        positive_values["relation_heads"] = cfg.model.relation_heads
-        positive_values["bilinear_dim"] = cfg.model.bilinear_dim
     for name, value in positive_values.items():
         if value <= 0:
             raise ValueError(f"{name} must be positive, got {value}")
 
     if cfg.data.num_workers < 0:
         raise ValueError(f"num_workers cannot be negative: {cfg.data.num_workers}")
+    if cfg.model.part_warmup_epochs < 0:
+        raise ValueError(
+            f"part_warmup_epochs cannot be negative: {cfg.model.part_warmup_epochs}"
+        )
     if not cfg.data.use_bbox_crop and cfg.data.resize_size < cfg.data.image_size:
         raise ValueError("resize_size must be at least image_size")
     if not 0.0 < cfg.data.val_ratio < 1.0:
@@ -120,6 +131,8 @@ def validate_config(cfg: ExperimentConfig) -> ExperimentConfig:
         raise ValueError(f"bbox_margin cannot be negative: {cfg.data.bbox_margin}")
     if cfg.train.weight_decay < 0:
         raise ValueError(f"weight_decay cannot be negative: {cfg.train.weight_decay}")
+    if not 0.0 <= cfg.train.ema_decay < 1.0:
+        raise ValueError("ema_decay must be in [0, 1)")
     if cfg.train.head_lr_mult <= 0:
         raise ValueError("head_lr_mult must be positive")
     if cfg.train.momentum < 0:
@@ -127,15 +140,12 @@ def validate_config(cfg: ExperimentConfig) -> ExperimentConfig:
     if not 0.0 <= cfg.train.label_smoothing < 1.0:
         raise ValueError("label_smoothing must be in [0, 1)")
     if (
-        cfg.model.name in {"swinv2_tiny_fpn_parts", "swinv2_tiny_fpn_relation"}
+        cfg.model.name in {
+            "swinv2_tiny_fpn_parts",
+        }
         and cfg.model.part_window_size % 2 == 0
     ):
         raise ValueError("part_window_size must be odd")
-    if (
-        cfg.model.name == "swinv2_tiny_fpn_relation"
-        and cfg.model.fpn_channels % cfg.model.relation_heads != 0
-    ):
-        raise ValueError("relation_heads must divide fpn_channels")
     if cfg.model.name not in SUPPORTED_MODELS:
         raise ValueError(f"Unsupported model: {cfg.model.name}")
     if cfg.train.optimizer not in {"sgd", "adamw"}:

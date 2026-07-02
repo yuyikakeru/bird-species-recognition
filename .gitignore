@@ -1,50 +1,71 @@
-# Python
+# Python caches
 __pycache__/
 *.py[cod]
 *$py.class
 *.so
-*.egg-info/
 *.egg
-dist/
-build/
-.eggs/
+*.egg-info/
 
 # Virtual environments
+.venv/
 venv/
 env/
-.venv/
 .env
 
-# IDE
+# IDE and OS files
 .vscode/
 .idea/
 *.swp
 *.swo
-
-# OS
 .DS_Store
 Thumbs.db
-AGENTS.md
-fine_grained_bird_recognition_plan.md
 
-# Model checkpoints and logs
+# Local instructions / private notes
+AGENTS.md
+
+# Datasets and generated masks
+datasets/
+
+# Checkpoints, logs, and experiment outputs
 ckpt/
 log/
-*.pth
+wandb/
+runs/
+outputs/
 *.pt
+*.pth
 *.ckpt
 
-# Datasets
-datasets/
-*.tar
-*.zip
-*.gz
+# HuggingFace / Torch local caches
+hf-cache/
+torch-cache/
 
-# Reference papers and local notes
+# Local analysis outputs
+analysis/**/*.csv
+analysis/**/*.png
+analysis/**/*.jpg
+analysis/**/*.jpeg
+analysis/**/*.pt
+analysis/**/*.pth
+analysis/**/*.ckpt
+analysis/**/__pycache__/
+
+# Website runtime outputs
+bird_web_app/*.log
+bird_web_app/__pycache__/
+bird_web_app/*.pyc
+
+# Reference papers and local reading material
 references/
 
-# Jupyter
-.ipynb_checkpoints/
+# Archives and transfer packages
+*.tar
+*.tar.gz
+*.tgz
+*.zip
+*.gz
+*.rar
+*.7z
 
-# Wandb
-wandb/
+# Notebook checkpoints
+.ipynb_checkpoints/

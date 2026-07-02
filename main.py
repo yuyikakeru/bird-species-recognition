@@ -12,11 +12,13 @@ from torch import nn
 from config import SUPPORTED_MODELS, build_config, validate_config
 from data_utils import build_dataloader
 from model import (
+    build_convnextv2_tiny,
+    build_convnextv2_tiny_dca,
+    build_convnextv2_tiny_dca_region,
     build_resnet50_baseline,
     build_swinv2_tiny_baseline,
     build_swinv2_tiny_fpn,
     build_swinv2_tiny_fpn_parts,
-    build_swinv2_tiny_fpn_relation,
 )
 from trainer import Trainer
 from utils import RunLock, get_device, mean_std, save_csv, save_json, set_seed
@@ -26,11 +28,12 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="CUB_200_2011 training entrypoint")
     parser.add_argument(
         "--mode",
-        choices=["train", "summarize", "pipeline", "test"],
+        choices=["train", "summarize", "pipeline", "full_test", "test"],
         required=True,
     )
     parser.add_argument("--model", choices=SUPPORTED_MODELS, required=True)
     parser.add_argument("--data-root", default=None)
+    parser.add_argument("--cam-root", default=None)
     parser.add_argument("--batch-size", type=int, default=None)
     parser.add_argument("--image-size", type=int, default=None)
     parser.add_argument("--resize-size", type=int, default=None)
@@ -75,14 +78,19 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--label-smoothing", type=float, default=None)
     parser.add_argument("--scheduler", choices=["cosine", "none"], default=None)
     parser.add_argument("--grad-clip-norm", type=float, default=None)
+    parser.add_argument("--ema-decay", type=float, default=None)
     parser.add_argument("--device", default=None)
     parser.add_argument("--use-bbox-crop", action="store_true")
     parser.add_argument("--no-pretrained", dest="pretrained", action="store_false")
     parser.add_argument("--fpn-channels", type=int, default=None)
     parser.add_argument("--num-parts", type=int, default=None)
     parser.add_argument("--part-window-size", type=int, default=None)
-    parser.add_argument("--relation-heads", type=int, default=None)
-    parser.add_argument("--bilinear-dim", type=int, default=None)
+    parser.add_argument(
+        "--part-warmup-epochs",
+        type=int,
+        default=None,
+        help="Use soft attention part pooling for the first N training epochs.",
+    )
     parser.set_defaults(pretrained=None)
     return parser.parse_args()
 
@@ -121,11 +129,11 @@ def apply_candidate_overrides(cfg, candidate: dict):
         "label_smoothing",
         "scheduler",
         "grad_clip_norm",
+        "ema_decay",
         "fpn_channels",
         "num_parts",
         "part_window_size",
-        "relation_heads",
-        "bilinear_dim",
+        "part_warmup_epochs",
     }
     for key, value in candidate.items():
         if key == "id":
@@ -139,6 +147,8 @@ def apply_candidate_overrides(cfg, candidate: dict):
             setattr(candidate_cfg.data, key, value)
         elif hasattr(candidate_cfg.train, key):
             setattr(candidate_cfg.train, key, value)
+        elif hasattr(candidate_cfg.model, key):
+            setattr(candidate_cfg.model, key, value)
         else:
             raise KeyError(f"Unknown search-space option: {key}")
     return validate_config(candidate_cfg)
@@ -152,6 +162,22 @@ def candidate_slug(candidate: dict, index: int) -> str:
 
 def build_model(cfg) -> nn.Module:
     builders = {
+        "convnextv2_tiny": lambda: build_convnextv2_tiny(
+            num_classes=cfg.model.num_classes,
+            pretrained=cfg.model.pretrained,
+            image_size=cfg.data.image_size,
+        ),
+        "convnextv2_tiny_dca": lambda: build_convnextv2_tiny_dca(
+            num_classes=cfg.model.num_classes,
+            pretrained=cfg.model.pretrained,
+            image_size=cfg.data.image_size,
+        ),
+        "convnextv2_tiny_dca_region": lambda: build_convnextv2_tiny_dca_region(
+            num_classes=cfg.model.num_classes,
+            pretrained=cfg.model.pretrained,
+            image_size=cfg.data.image_size,
+            fpn_channels=cfg.model.fpn_channels,
+        ),
         "resnet50_baseline": lambda: build_resnet50_baseline(
             num_classes=cfg.model.num_classes,
             pretrained=cfg.model.pretrained,
@@ -174,16 +200,7 @@ def build_model(cfg) -> nn.Module:
             fpn_channels=cfg.model.fpn_channels,
             num_parts=cfg.model.num_parts,
             part_window_size=cfg.model.part_window_size,
-        ),
-        "swinv2_tiny_fpn_relation": lambda: build_swinv2_tiny_fpn_relation(
-            num_classes=cfg.model.num_classes,
-            pretrained=cfg.model.pretrained,
-            image_size=cfg.data.image_size,
-            fpn_channels=cfg.model.fpn_channels,
-            num_parts=cfg.model.num_parts,
-            part_window_size=cfg.model.part_window_size,
-            relation_heads=cfg.model.relation_heads,
-            bilinear_dim=cfg.model.bilinear_dim,
+            part_warmup_epochs=cfg.model.part_warmup_epochs,
         ),
     }
     return builders[cfg.model.name]()
@@ -375,11 +392,11 @@ def run_selection_pipeline(
                     "label_smoothing": run_cfg.train.label_smoothing,
                     "scheduler": run_cfg.train.scheduler,
                     "grad_clip_norm": run_cfg.train.grad_clip_norm,
+                    "ema_decay": run_cfg.train.ema_decay,
                     "fpn_channels": run_cfg.model.fpn_channels,
                     "num_parts": run_cfg.model.num_parts,
                     "part_window_size": run_cfg.model.part_window_size,
-                    "relation_heads": run_cfg.model.relation_heads,
-                    "bilinear_dim": run_cfg.model.bilinear_dim,
+                    "part_warmup_epochs": run_cfg.model.part_warmup_epochs,
                     "seed": seed,
                     "best_val_top1": metrics["best_top1"],
                     "best_epoch": metrics["best_epoch"],
@@ -494,6 +511,48 @@ def save_repeat_summary(cfg, seeds: list[int], rows: list[dict], base_output_dir
     print("repeat_summary", summary)
 
 
+def run_full_train_test(cfg, seeds: list[int], run_name: str | None = None) -> None:
+    experiment_name = run_name or "full_test_" + "_".join(str(seed) for seed in seeds)
+    base_output_dir = Path(cfg.train.output_dir) / "pipeline" / experiment_name
+    base_ckpt_dir = Path(cfg.train.ckpt_dir) / "pipeline" / experiment_name
+    rows = []
+
+    with RunLock(base_output_dir / ".run.lock"):
+        test_loader = build_dataloader(cfg, "test", shuffle=False)
+        for seed in seeds:
+            run_cfg = copy.deepcopy(cfg)
+            run_cfg.train.seed = seed
+            run_cfg.train.output_dir = base_output_dir / "final" / f"seed_{seed}"
+            run_cfg.train.ckpt_dir = base_ckpt_dir / "final" / f"seed_{seed}"
+            print(
+                f"full_train_test model={run_cfg.model.name} seed={seed} "
+                f"epochs={run_cfg.train.epochs}"
+            )
+            set_seed(seed)
+            train_metrics = run_full_train(run_cfg)
+            checkpoint_path = Path(train_metrics["checkpoint"])
+            test_metrics = run_test_checkpoint(
+                run_cfg,
+                checkpoint_path,
+                test_loader=test_loader,
+            )
+            rows.append(
+                {
+                    "seed": seed,
+                    "model": run_cfg.model.name,
+                    "epochs": run_cfg.train.epochs,
+                    "train_loss": train_metrics["train_loss"],
+                    "train_top1": train_metrics["train_top1"],
+                    **test_metrics,
+                }
+            )
+
+        summary = summarize_test_rows(cfg.model.name, rows)
+        save_json(summary, base_output_dir / "final_test_summary.json")
+        save_csv(rows, base_output_dir / "final_test_summary.csv")
+        print("final_test_summary", summary)
+
+
 def run_repeated_train(cfg, seeds: list[int], run_name: str | None = None) -> None:
     experiment_name = run_name or "seeds_" + "_".join(str(seed) for seed in seeds)
     base_output_dir = Path(cfg.train.output_dir) / cfg.model.name / experiment_name
@@ -562,6 +621,7 @@ def main() -> None:
     args = parse_args()
     cfg = build_config(
         root=args.data_root,
+        cam_root=args.cam_root,
         batch_size=args.batch_size,
         image_size=args.image_size,
         resize_size=args.resize_size,
@@ -578,6 +638,7 @@ def main() -> None:
         label_smoothing=args.label_smoothing,
         scheduler=args.scheduler,
         grad_clip_norm=args.grad_clip_norm,
+        ema_decay=args.ema_decay,
         device=args.device,
         output_dir=args.output_dir,
         ckpt_dir=args.ckpt_dir,
@@ -586,8 +647,7 @@ def main() -> None:
         fpn_channels=args.fpn_channels,
         num_parts=args.num_parts,
         part_window_size=args.part_window_size,
-        relation_heads=args.relation_heads,
-        bilinear_dim=args.bilinear_dim,
+        part_warmup_epochs=args.part_warmup_epochs,
         name=args.model,
     )
 
@@ -598,6 +658,8 @@ def main() -> None:
         run_summarize(cfg, seeds, args.run_name)
     elif args.mode == "pipeline":
         run_selection_pipeline(cfg, seeds, args.run_name, args.search_space)
+    elif args.mode == "full_test":
+        run_full_train_test(cfg, seeds, args.run_name)
     else:
         if not args.checkpoints:
             raise ValueError("--checkpoints is required in test mode.")

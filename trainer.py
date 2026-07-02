@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 from pathlib import Path
 
 import torch
@@ -35,9 +36,86 @@ class Trainer:
         self.optimizer_steps = 0
 
         self.model.to(self.device)
+        self.use_ema_tta = True
+        self.ema_model = None
+        if self.use_ema_tta and self.optimizer is not None:
+            self.ema_model = copy.deepcopy(self.model).eval()
+            for param in self.ema_model.parameters():
+                param.requires_grad_(False)
+    def _update_ema(self) -> None:
+        if self.ema_model is None:
+            return
 
-    def _forward_batch(self, images: torch.Tensor, batch: dict) -> torch.Tensor:
-        return self.model(images)
+        decay = self.cfg.train.ema_decay
+        with torch.no_grad():
+            model_params = dict(self.model.named_parameters())
+            for name, ema_param in self.ema_model.named_parameters():
+                ema_param.mul_(decay).add_(model_params[name].detach(), alpha=1.0 - decay)
+
+            model_buffers = dict(self.model.named_buffers())
+            for name, ema_buffer in self.ema_model.named_buffers():
+                ema_buffer.copy_(model_buffers[name].detach())
+
+    def _checkpoint_model_state(self) -> dict[str, torch.Tensor]:
+        if self.ema_model is not None:
+            return self.ema_model.state_dict()
+        return self.model.state_dict()
+
+    def _forward_once(
+        self,
+        model: nn.Module,
+        images: torch.Tensor,
+        batch: dict,
+        cam_mask_override: torch.Tensor | None = None,
+        return_features: bool = False,
+    ) -> torch.Tensor:
+        cam_mask = batch.get("cam_mask") if cam_mask_override is None else cam_mask_override
+        uses_cam_parts = self.cfg.model.name in {
+            "swinv2_tiny_fpn_parts",
+        }
+        if not uses_cam_parts:
+            return model(images)
+        if cam_mask is None:
+            if model.training:
+                raise ValueError(
+                    f"{self.cfg.model.name} requires cam_mask during training. "
+                    "Generate CAM masks for train/train_full and pass --cam-root."
+                )
+            return model(images, return_features=return_features)
+
+        cam_mask = cam_mask.to(self.device, non_blocking=True)
+        return model(images, return_features=return_features, cam_mask=cam_mask)
+
+    def _forward_batch(
+        self,
+        images: torch.Tensor,
+        batch: dict,
+        model: nn.Module | None = None,
+        return_features: bool = False,
+    ) -> torch.Tensor:
+        active_model = model or self.model
+        output = self._forward_once(
+            active_model,
+            images,
+            batch,
+            return_features=return_features,
+        )
+        logits = output["logits"] if isinstance(output, dict) else output
+        if not self.use_ema_tta or active_model.training:
+            return output if return_features else logits
+
+        flipped_images = torch.flip(images, dims=[3])
+        cam_mask = batch.get("cam_mask")
+        flipped_cam = None
+        if cam_mask is not None:
+            flipped_cam = torch.flip(cam_mask.to(self.device, non_blocking=True), dims=[3])
+        flipped_logits = self._forward_once(
+            active_model,
+            flipped_images,
+            batch,
+            cam_mask_override=flipped_cam,
+        )
+        return 0.5 * (logits + flipped_logits)
 
     def fit(self) -> dict[str, float]:
         if self.train_loader is None or self.val_loader is None:
@@ -60,8 +138,10 @@ class Trainer:
                 save_checkpoint(
                     {
                         "epoch": epoch + 1,
-                        "model": self.model.state_dict(),
+                        "model": self._checkpoint_model_state(),
                         "best_top1": self.best_top1,
+                        "ema_enabled": self.ema_model is not None,
+                        "tta_enabled": self.use_ema_tta,
                         "config": str(self.cfg),
                     },
                     Path(self.cfg.train.ckpt_dir) / f"{self.cfg.model.name}_best.pt",
@@ -125,7 +205,9 @@ class Trainer:
         save_checkpoint(
             {
                 "epoch": self.cfg.train.epochs,
-                "model": self.model.state_dict(),
+                "model": self._checkpoint_model_state(),
+                "ema_enabled": self.ema_model is not None,
+                "tta_enabled": self.use_ema_tta,
                 "config": str(self.cfg),
             },
             checkpoint_path,
@@ -154,7 +236,10 @@ class Trainer:
 
     def train_one_epoch(self, epoch: int) -> dict[str, float]:
         self.model.train()
+        if hasattr(self.model, "set_epoch"):
+            self.model.set_epoch(epoch + 1)
         loss_meter = AverageMeter()
+        aux_loss_meter = AverageMeter()
         top1_meter = AverageMeter()
 
         for step, batch in enumerate(self.train_loader):
@@ -163,8 +248,13 @@ class Trainer:
 
             self.optimizer.zero_grad(set_to_none=True)
             with torch.amp.autocast(self.device.type, enabled=self.amp_enabled):
-                logits = self._forward_batch(images, batch)
+                output = self._forward_batch(images, batch, return_features=True)
+                logits = output["logits"] if isinstance(output, dict) else output
                 loss = self.criterion(logits, labels)
+                aux_loss = None
+                if isinstance(output, dict) and "aux_loss" in output:
+                    aux_loss = output["aux_loss"]
+                    loss = loss + aux_loss
 
             if not torch.isfinite(logits).all() or not torch.isfinite(loss):
                 raise FloatingPointError(
@@ -187,6 +277,7 @@ class Trainer:
                 self.scaler.update()
                 if self.scaler.get_scale() >= scale_before:
                     self.optimizer_steps += 1
+                    self._update_ema()
             else:
                 loss.backward()
                 torch.nn.utils.clip_grad_norm_(
@@ -196,19 +287,30 @@ class Trainer:
                 )
                 self.optimizer.step()
                 self.optimizer_steps += 1
+                self._update_ema()
 
             batch_size = labels.size(0)
             acc = accuracy(logits.detach(), labels, topk=(1,))
             loss_meter.update(float(loss.item()), batch_size)
+            if aux_loss is not None:
+                aux_loss_meter.update(float(aux_loss.detach().item()), batch_size)
             top1_meter.update(acc["top1"], batch_size)
 
             if step % self.cfg.train.log_interval == 0:
-                print(
+                log_items = [
                     f"train epoch={epoch + 1} step={step + 1}/{len(self.train_loader)} "
-                    f"loss={loss_meter.avg:.4f} top1={top1_meter.avg:.2f}"
-                )
+                    f"loss={loss_meter.avg:.4f}",
+                ]
+                if aux_loss_meter.count > 0:
+                    log_items.append(f"aux={aux_loss_meter.avg:.4f}")
+                log_items.append(f"top1={top1_meter.avg:.2f}")
+                print(" ".join(log_items))
 
-        return {"train_loss": loss_meter.avg, "train_top1": top1_meter.avg}
+        metrics = {
+            "train_loss": loss_meter.avg,
+            "train_top1": top1_meter.avg,
+        }
+        return metrics
 
     @torch.no_grad()
     def evaluate(self, epoch: int = 0) -> dict[str, float]:
@@ -229,7 +331,8 @@ class Trainer:
         epoch: int = 0,
     ) -> dict[str, float]:
 
-        self.model.eval()
+        eval_model = self.ema_model if self.ema_model is not None else self.model
+        eval_model.eval()
         loss_meter = AverageMeter()
         top1_meter = AverageMeter()
         top5_meter = AverageMeter()
@@ -239,7 +342,7 @@ class Trainer:
             labels = batch["label"].to(self.device, non_blocking=True)
 
             with torch.amp.autocast(self.device.type, enabled=self.amp_enabled):
-                logits = self._forward_batch(images, batch)
+                logits = self._forward_batch(images, batch, model=eval_model)
                 loss = self.criterion(logits, labels)
             if not torch.isfinite(logits).all() or not torch.isfinite(loss):
                 raise FloatingPointError(

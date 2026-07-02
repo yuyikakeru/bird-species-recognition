@@ -30,7 +30,7 @@ class ImageTransform:
             hue=0.02,
         )
 
-    def __call__(self, image):
+    def __call__(self, image, mask=None):
         if self.training:
             if self.use_bbox_crop:
                 image = TF.resize(
@@ -38,6 +38,13 @@ class ImageTransform:
                     [self.image_size, self.image_size],
                     antialias=True,
                 )
+                if mask is not None:
+                    mask = TF.resize(
+                        mask,
+                        [self.image_size, self.image_size],
+                        interpolation=transforms.InterpolationMode.BILINEAR,
+                        antialias=True,
+                    )
             else:
                 top, left, height, width = transforms.RandomResizedCrop.get_params(
                     image,
@@ -53,9 +60,22 @@ class ImageTransform:
                     [self.image_size, self.image_size],
                     antialias=True,
                 )
+                if mask is not None:
+                    mask = TF.resized_crop(
+                        mask,
+                        top,
+                        left,
+                        height,
+                        width,
+                        [self.image_size, self.image_size],
+                        interpolation=transforms.InterpolationMode.BILINEAR,
+                        antialias=True,
+                    )
 
             if bool(torch.rand(()) < 0.5):
                 image = TF.hflip(image)
+                if mask is not None:
+                    mask = TF.hflip(mask)
             image = self.color_jitter(image)
         elif self.use_bbox_crop:
             image = TF.resize(
@@ -63,16 +83,35 @@ class ImageTransform:
                 [self.image_size, self.image_size],
                 antialias=True,
             )
+            if mask is not None:
+                mask = TF.resize(
+                    mask,
+                    [self.image_size, self.image_size],
+                    interpolation=transforms.InterpolationMode.BILINEAR,
+                    antialias=True,
+                )
         else:
             image = TF.resize(image, self.resize_size, antialias=True)
             image = TF.center_crop(image, [self.image_size, self.image_size])
+            if mask is not None:
+                mask = TF.resize(
+                    mask,
+                    self.resize_size,
+                    interpolation=transforms.InterpolationMode.BILINEAR,
+                    antialias=True,
+                )
+                mask = TF.center_crop(mask, [self.image_size, self.image_size])
 
         image_tensor = TF.normalize(
             TF.to_tensor(image),
             IMAGENET_MEAN,
             IMAGENET_STD,
         )
-        return image_tensor
+        if mask is None:
+            return image_tensor
+
+        mask_tensor = TF.to_tensor(mask).clamp(0.0, 1.0)
+        return image_tensor, mask_tensor
 
 
 def build_transforms(
